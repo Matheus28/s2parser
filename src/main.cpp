@@ -1,4 +1,8 @@
+#undef _UNICODE
+
 #include "s2parser.h"
+
+#include "StormLib.h"
 
 #include <fstream>
 #include <chrono>
@@ -72,31 +76,72 @@ int64_t WindowsToUnixTimestamp(int64_t v){
 	return (v - 116444735995904000) / 10000000;
 }
 
+struct MPQCloser {
+	void operator()(HANDLE v) const {
+		SFileCloseArchive(v);
+	}
+};
+
+std::optional<std::string> GetMPQFile(HANDLE mpq, const char *filename){
+	HANDLE file;
+	if(!SFileOpenFileEx(mpq, filename, 0, &file) || !file) return {};
+	
+	DWORD low;
+	DWORD high;
+	low = SFileGetFileSize(file, &high);
+	if(high != 0){ // Too large anyway
+		SFileCloseFile(file);
+		return {};
+	}
+	
+	DWORD read;
+	
+	std::string ret;
+	ret.resize(low);
+	SFileReadFile(file, ret.data(), low, &read, nullptr);
+	SFileCloseFile(file);
+	
+	if(low != read) return {};
+	return ret;
+}
+
 int main(){
+	std::chrono::steady_clock::time_point start, end;
+	
 	std::cout << "main()" << std::endl;
-	
-	auto start = std::chrono::steady_clock::now();
-	
-	std::ifstream in{"s2protocol/json/protocol87702.json"};
-	ProtocolParser p{in};
-	auto end = std::chrono::steady_clock::now();
-	
-	
 	std::cout << std::setprecision(2);
 	std::cout << std::fixed;
-	std::cout << "Parsing protocol took " << countClock(start, end) << " ms" << std::endl;
+	
+	
+	const char *filename = "bin/test.SC2Replay";
+	
+	std::unique_ptr<void, MPQCloser> mpq;
 	
 	{
 		start = std::chrono::steady_clock::now();
+		HANDLE tmp;
+		if(!SFileOpenArchive(filename, 0, 0, &tmp)){
+			std::cerr << "Failed to open archive " << filename << std::endl;
+			return 1;
+		}
 		
-		std::ifstream in("bin/replay.tracker.events", std::ios::binary);
-		std::stringstream ss;
-		ss << in.rdbuf();
-		auto str = ss.str();
+		mpq = std::unique_ptr<void, MPQCloser>(tmp);
+		end = std::chrono::steady_clock::now();
+		std::cout << "Opening archive took " << countClock(start, end) << " ms" << std::endl;
+	}
+	
+	start = std::chrono::steady_clock::now();
+	std::ifstream in{"s2protocol/json/protocol87702.json"};
+	ProtocolParser p{in};
+	end = std::chrono::steady_clock::now();
+	std::cout << "Parsing protocol took " << countClock(start, end) << " ms" << std::endl;
+	
+	if(auto str = GetMPQFile(mpq.get(), "replay.tracker.events")){
+		start = std::chrono::steady_clock::now();
 		
 		auto l = GetTrackerListener();
 		p.DecodeEventStream(
-			str,
+			*str,
 			true,
 			"NNet.Replay.Tracker.EEventId",
 			false,
@@ -107,17 +152,12 @@ int main(){
 		std::cout << "Parsing tracker events took " << countClock(start, end) << " ms" << std::endl;
 	}
 	
-	{
+	if(auto str = GetMPQFile(mpq.get(), "replay.game.events")){
 		start = std::chrono::steady_clock::now();
-		
-		std::ifstream in("bin/replay.game.events", std::ios::binary);
-		std::stringstream ss;
-		ss << in.rdbuf();
-		auto str = ss.str();
 		
 		auto l = GetTrackerListener();
 		p.DecodeEventStream(
-			str,
+			*str,
 			false,
 			"NNet.Game.EEventId",
 			true,
@@ -128,17 +168,12 @@ int main(){
 		std::cout << "Parsing game events took " << countClock(start, end) << " ms" << std::endl;
 	}
 	
-	{
+	if(auto str = GetMPQFile(mpq.get(), "replay.details")){
 		start = std::chrono::steady_clock::now();
-		
-		std::ifstream in("bin/replay.details", std::ios::binary);
-		std::stringstream ss;
-		ss << in.rdbuf();
-		auto str = ss.str();
 		
 		auto l = GetDetailsListener();
 		p.DecodeInstance(
-			str,
+			*str,
 			true,
 			"NNet.Game.SDetails",
 			&l
@@ -311,7 +346,19 @@ BroadcastListener GetTrackerListener(){
 		"upgrade",
 		{
 			{ BasicStructListener::kTypeInt, "m_playerId", "player" },
-			{ BasicStructListener::kTypeString, "m_upgradeTypeName", "upgradeType" },
+			{
+				BasicStructListener::kTypeString, "m_upgradeTypeName", "upgradeType", [](std::variant<int64_t, std::string_view> v){
+					auto &value = std::get<std::string_view>(v);
+					
+					if(value == "SprayTerran") return false; // Not used atm but I don't ever wanna see this
+					if(value == "SprayZerg") return false;
+					if(value == "SprayProtoss") return false;
+					if(value == "VoidStoryUnitGlobalUpgrade") return false;
+					
+					
+					return true;
+				}
+			},
 			{ BasicStructListener::kTypeInt, "m_count", "count" },
 		}
 	)));
@@ -329,15 +376,6 @@ BroadcastListener GetGameListener(){
 			{ BasicStructListener::kTypeString, "m_leaveReason", "reason" },
 		}
 	)));
-	r.AddListener(std::make_unique<BasicStructListener>(BasicStructListener(
-		"NNet.Game.EEventId.e_gameDetails",
-		"playerLeft",
-		{
-			{ BasicStructListener::kTypeString, "m_leaveReason", "reason" },
-		}
-	)));
-	
-	
 	
 	return r;
 }
@@ -351,10 +389,8 @@ BroadcastListener GetDetailsListener(){
 		{
 			//m_playerList
 			{ BasicStructListener::kTypeString, "m_title", "title" },
-			{ BasicStructListener::kTypeString, "m_difficulty", "difficulty" },
 			{ BasicStructListener::kTypeInt, "m_timeUTC", "timeUTC" },
 			{ BasicStructListener::kTypeInt, "m_timeLocalOffset", "timeLocalOffset" },
-			{ BasicStructListener::kTypeString, "m_mapFileName", "mapFileName" },
 		}
 	)));
 	
