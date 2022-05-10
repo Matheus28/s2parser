@@ -105,6 +105,30 @@ std::optional<std::string> GetMPQFile(HANDLE mpq, const char *filename){
 	return ret;
 }
 
+uint32_t GetLatestProtocolVersion(){
+	return 87702;
+}
+
+std::optional<ProtocolParser> LoadProtocol(uint32_t version){
+	std::stringstream filename;
+	filename << "s2protocol/json/protocol" << version << ".json";
+	
+	auto start = std::chrono::steady_clock::now();
+	
+	std::ifstream in{filename.str()};
+	ProtocolParser p;
+	if(!p.Init(in)) return {};
+	
+	auto end = std::chrono::steady_clock::now();
+	std::cout << "Parsing protocol " << version << " took " << countClock(start, end) << " ms" << std::endl;
+	return p;
+}
+
+ProtocolParser& GetLatestProtocolParser(){
+	static auto v = *LoadProtocol(GetLatestProtocolVersion());
+	return v;
+}
+
 int main(){
 	std::chrono::steady_clock::time_point start, end;
 	
@@ -130,17 +154,76 @@ int main(){
 		std::cout << "Opening archive took " << countClock(start, end) << " ms" << std::endl;
 	}
 	
-	start = std::chrono::steady_clock::now();
-	std::ifstream in{"s2protocol/json/protocol87702.json"};
-	ProtocolParser p{in};
-	end = std::chrono::steady_clock::now();
-	std::cout << "Parsing protocol took " << countClock(start, end) << " ms" << std::endl;
+	uint32_t baseBuild = 0;
+	
+	{
+		DWORD userDataLen = 0;
+		SFileGetFileInfo(mpq.get(), SFileMpqUserData, NULL, 0, &userDataLen);
+		
+		std::cout << "Need " << userDataLen << " bytes for user data" << std::endl;;
+		std::string userData;
+		userData.resize(userDataLen);
+		if(!SFileGetFileInfo(mpq.get(), SFileMpqUserData, userData.data(), userData.size(), nullptr)){
+			std::cerr << "SFileGetFileInfo failed (" << userDataLen << ")" << std::endl;
+			return 1;
+		}
+		
+		struct ProtocolListener : public NullListener {
+			ProtocolListener(uint32_t &baseBuild) : baseBuild(baseBuild){}
+			
+			void OnStructField(std::string_view name) override {
+				listening = (name == "m_baseBuild");
+			}
+			
+			void OnExitStruct() override {
+				listening = false;
+			}
+			
+			void OnValueInt(int64_t value) override {
+				if(listening){
+					baseBuild = (uint32_t) value;
+					listening = false;
+				}
+			}
+			
+			bool listening = false;
+			uint32_t &baseBuild;
+		};
+		
+		ProtocolListener l{baseBuild};
+		if(!GetLatestProtocolParser().DecodeInstance(userData, true, "NNet.Replay.SHeader", &l)){
+			std::cerr << "DecodeInstance for replay header failed" << std::endl;
+			return 1;
+		}
+		
+		std::cout << "Base build " << baseBuild << std::endl;
+		if(baseBuild == 0){
+			std::cerr << "No m_baseBuild in archive" << std::endl;
+			return 1;
+		}
+	}
+	
+	ProtocolParser *replayProtocol = nullptr;
+	std::optional<ProtocolParser> replayProtocolContainer;
+	
+	if(baseBuild == GetLatestProtocolVersion()){
+		replayProtocol = &GetLatestProtocolParser();
+	}else{
+		// We need to load the right protocol version for this
+		replayProtocolContainer = LoadProtocol(baseBuild);
+		if(!replayProtocolContainer){
+			std::cerr << "We don't have a decoder for protocol " << baseBuild << std::endl;
+			return 1;
+		}
+		
+		replayProtocol = &*replayProtocolContainer;
+	}
 	
 	if(auto str = GetMPQFile(mpq.get(), "replay.tracker.events")){
 		start = std::chrono::steady_clock::now();
 		
 		auto l = GetTrackerListener();
-		p.DecodeEventStream(
+		replayProtocol->DecodeEventStream(
 			*str,
 			true,
 			"NNet.Replay.Tracker.EEventId",
@@ -156,7 +239,7 @@ int main(){
 		start = std::chrono::steady_clock::now();
 		
 		auto l = GetTrackerListener();
-		p.DecodeEventStream(
+		replayProtocol->DecodeEventStream(
 			*str,
 			false,
 			"NNet.Game.EEventId",
@@ -172,7 +255,7 @@ int main(){
 		start = std::chrono::steady_clock::now();
 		
 		auto l = GetDetailsListener();
-		p.DecodeInstance(
+		replayProtocol->DecodeInstance(
 			*str,
 			true,
 			"NNet.Game.SDetails",

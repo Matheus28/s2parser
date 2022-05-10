@@ -205,13 +205,13 @@ private:
 };
 
 struct ProtocolParser {
-	ProtocolParser(std::istream &in){
+	bool Init(std::istream &in){
 		in >> m_Root;
 		
 		auto err = picojson::get_last_error();
 		if(!err.empty()){
 			std::cerr << "Failed to parse protocol file json: " << err << std::endl;
-			abort();
+			return false;
 		}
 		
 		auto &modules = json::AssertReach<picojson::array>(m_Root, {"modules"});
@@ -220,6 +220,7 @@ struct ProtocolParser {
 		}
 		
 		ResolveUserTypes();
+		return true;
 	}
 	
 	// Decodes a specific structure
