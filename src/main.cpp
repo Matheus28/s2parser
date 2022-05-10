@@ -1,7 +1,6 @@
 #include "s2parser.h"
 
 #include <fstream>
-#include <filesystem>
 #include <chrono>
 #include <sstream>
 #include <iomanip>
@@ -69,6 +68,10 @@ static BroadcastListener GetTrackerListener();
 static BroadcastListener GetGameListener();
 static BroadcastListener GetDetailsListener();
 
+int64_t WindowsToUnixTimestamp(int64_t v){
+	return (v - 116444735995904000) / 10000000;
+}
+
 int main(){
 	std::cout << "main()" << std::endl;
 	
@@ -82,15 +85,6 @@ int main(){
 	std::cout << std::setprecision(2);
 	std::cout << std::fixed;
 	std::cout << "Parsing protocol took " << countClock(start, end) << " ms" << std::endl;
-	
-	/*
-	std::cout << "Backtesting old protocols" << std::endl;
-	for(auto &entry : std::filesystem::directory_iterator("./s2protocol/json/")){
-		std::cout << entry.path() << std::endl;
-		std::ifstream in{entry.path()};
-		ProtocolParser p{in};
-	}
-	*/
 	
 	{
 		start = std::chrono::steady_clock::now();
@@ -151,7 +145,7 @@ int main(){
 		);
 		
 		end = std::chrono::steady_clock::now();
-		std::cout << "Parsing game events took " << countClock(start, end) << " ms" << std::endl;
+		std::cout << "Parsing details took " << countClock(start, end) << " ms" << std::endl;
 	}
 	
 	std::cout << "~main()" << std::endl;
@@ -165,7 +159,7 @@ struct BasicStructListener : NullListener {
 	};
 	
 	struct Field {
-		typedef bool(*field_filter_t)(std::variant<int, std::string_view>);
+		typedef bool(*field_filter_t)(std::variant<int64_t, std::string_view>);
 		
 		Field(Type type, std::string_view gameFieldName, std::string_view jsonFieldName, const field_filter_t& fieldFilter = nullptr)
 		: type(type)
@@ -182,7 +176,7 @@ struct BasicStructListener : NullListener {
 		field_filter_t fieldFilter;
 		
 		bool hasValue = false;
-		int intValue;
+		int64_t intValue;
 		std::string_view stringValue;
 	};
 	
@@ -211,8 +205,8 @@ struct BasicStructListener : NullListener {
 		
 		picojson::object root;
 		root.emplace("type", picojson::value(m_JSONName));
-		root.emplace("time", picojson::value((double) gameloop));
-		if(userid >= 0) root.emplace("userid", picojson::value((double) userid));
+		root.emplace("time", picojson::value(gameloop));
+		if(userid >= 0) root.emplace("userid", picojson::value((int64_t) userid));
 		
 		auto &obj = root.emplace("data", picojson::object()).first->second.get<picojson::object>();
 		for(auto &v : fields){
@@ -222,7 +216,7 @@ struct BasicStructListener : NullListener {
 			}
 			
 			if(v.type == kTypeInt){
-				obj.emplace(v.jsonFieldName, picojson::value((double) v.intValue));
+				obj.emplace(v.jsonFieldName, picojson::value(v.intValue));
 			}else{
 				obj.emplace(v.jsonFieldName, picojson::value(std::string(v.stringValue)));
 			}
@@ -255,7 +249,7 @@ struct BasicStructListener : NullListener {
 			*m_NextHasValue = true;
 			m_NextIntValue = nullptr;
 			
-			if(fieldFilter && !fieldFilter((int) v)){
+			if(fieldFilter && !fieldFilter(v)){
 				m_bListenToThisEvent = false;
 			}
 		}
@@ -283,7 +277,7 @@ private:
 	
 	bool *m_NextHasValue = nullptr;
 	std::string_view *m_NextStringValue = nullptr;
-	int *m_NextIntValue = nullptr;
+	int64_t *m_NextIntValue = nullptr;
 	Field::field_filter_t fieldFilter = nullptr;
 };
 
@@ -295,7 +289,7 @@ BroadcastListener GetTrackerListener(){
 		"unitBorn",
 		{
 			{
-				BasicStructListener::kTypeString, "m_unitTypeName", "type", [](std::variant<int, std::string_view> v){
+				BasicStructListener::kTypeString, "m_unitTypeName", "type", [](std::variant<int64_t, std::string_view> v){
 					auto &value = std::get<std::string_view>(v);
 					
 					static const auto prefix = "ReplayStats";

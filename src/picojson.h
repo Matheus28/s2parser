@@ -28,6 +28,8 @@
 #ifndef picojson_h
 #define picojson_h
 
+#define PICOJSON_USE_INT64
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>

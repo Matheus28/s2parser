@@ -4,6 +4,7 @@
 #include <iostream>
 #include <cassert>
 #include <unordered_map>
+#include <memory>
 
 #include "picojson.h"
 #include "json_utils.h"
@@ -943,6 +944,7 @@ private:
 			decl.max = std::stoll(max);
 		}catch(std::out_of_range){
 			decl.max = INT64_MAX;
+			decl.maxInclusive = true;
 		}
 		
 		{ // We can use doubles here, it'll be okay
