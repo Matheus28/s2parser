@@ -93,13 +93,14 @@ int main(){
 	//auto tracker = GetTrackerListener();
 	//listeners.tracker = &tracker;
 	
-	auto game = GetGameListener();
-	listeners.game = &game;
+	//auto game = GetGameListener();
+	//listeners.game = &game;
 	
-	auto details = JSONBuilderListener();
+	auto details = JSONBuilderListener(false);
 	listeners.details = &details;
 	
-	auto header = JSONBuilderListener();
+	auto headerJSON = JSONBuilderListener(false);
+	auto header = ScopeFilterListener({"m_version"}, true, &headerJSON);
 	listeners.header = &header;
 	
 	if(!LoadSC2Replay("bin/test.SC2Replay", listeners)){
@@ -107,10 +108,10 @@ int main(){
 	}
 	
 	for(auto &v : details.GetJSON()){
-		std::cout << v.serialize(true) << std::endl;
+		//std::cout << v.serialize(true) << std::endl;
 	}
 	
-	for(auto &v : header.GetJSON()){
+	for(auto &v : headerJSON.GetJSON()){
 		std::cout << v.serialize(true) << std::endl;
 	}
 	

@@ -114,50 +114,45 @@ private:
 };
 
 struct JSONBuilderListener : NullListener {
-	JSONBuilderListener(){
-		stack.emplace_back(picojson::array());
+	JSONBuilderListener(bool stripPrefix) : m_bStripPrefix(stripPrefix) {
+		m_Stack.emplace_back(picojson::array());
 	}
 	
-	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {}
-	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {}
-	
-	void OnEnterUserType(std::string_view name) override {}
-	void OnExitUserType(std::string_view name) override {}
-	
 	void OnEnterStruct() override {
-		keys.push_back(lastKey);
-		stack.emplace_back(picojson::object());
+		m_Keys.push_back(m_LastKey);
+		m_Stack.emplace_back(picojson::object());
 	}
 	
 	void OnStructField(std::string_view name) override {
-		lastKey = name;
+		if(m_bStripPrefix && name.size() >= 2 && name[0] == 'm' && name[1] == '_') name.remove_prefix(2);
+		m_LastKey = name;
 	}
 	
 	void OnExitStruct() override {
-		auto v = std::move(stack.back());
-		stack.pop_back();
+		auto v = std::move(m_Stack.back());
+		m_Stack.pop_back();
 		assert(v.is<picojson::object>());
 		
-		assert(!keys.empty());
-		lastKey = std::move(keys.back());
-		keys.pop_back();
+		assert(!m_Keys.empty());
+		m_LastKey = std::move(m_Keys.back());
+		m_Keys.pop_back();
 		
 		OnValue(std::move(v));
 	}
 	
 	void OnEnterArray() override {
-		keys.push_back(lastKey);
-		stack.emplace_back(picojson::array());
+		m_Keys.push_back(m_LastKey);
+		m_Stack.emplace_back(picojson::array());
 	}
 	
 	void OnExitArray() override {
-		auto v = std::move(stack.back());
-		stack.pop_back();
+		auto v = std::move(m_Stack.back());
+		m_Stack.pop_back();
 		assert(v.is<picojson::array>());
 		
-		assert(!keys.empty());
-		lastKey = std::move(keys.back());
-		keys.pop_back();
+		assert(!m_Keys.empty());
+		m_LastKey = std::move(m_Keys.back());
+		m_Keys.pop_back();
 		
 		OnValue(std::move(v));
 	}
@@ -179,25 +174,26 @@ struct JSONBuilderListener : NullListener {
 	}
 	
 	const picojson::array& GetJSON(){
-		assert(stack.size() == 1);
-		return stack.back().get<picojson::array>();
+		assert(m_Stack.size() == 1);
+		return m_Stack.back().get<picojson::array>();
 	}
 	
 private:
 	void OnValue(picojson::value v){
-		assert(!stack.empty());
-		if(stack.back().is<picojson::object>()){
-			stack.back().get<picojson::object>()[std::string(lastKey)] = v;
-		}else if(stack.back().is<picojson::array>()){
-			stack.back().get<picojson::array>().push_back(v);
+		assert(!m_Stack.empty());
+		if(m_Stack.back().is<picojson::object>()){
+			m_Stack.back().get<picojson::object>()[std::string(m_LastKey)] = v;
+		}else if(m_Stack.back().is<picojson::array>()){
+			m_Stack.back().get<picojson::array>().push_back(v);
 		}else{
 			assert(false);
 		}
 	}
 	
-	std::string_view lastKey = "";
-	std::vector<std::string_view> keys;
-	std::vector<picojson::value> stack;
+	bool m_bStripPrefix;
+	std::string_view m_LastKey = "";
+	std::vector<std::string_view> m_Keys;
+	std::vector<picojson::value> m_Stack;
 };
 
 struct BasicStructListener : NullListener {
@@ -327,6 +323,130 @@ private:
 	std::string_view *m_NextStringValue = nullptr;
 	int64_t *m_NextIntValue = nullptr;
 	Field::field_filter_t fieldFilter = nullptr;
+};
+
+struct ScopeFilterListener : Listener {
+	ScopeFilterListener(
+		std::initializer_list<std::string> ll,
+		bool includeDescendants,
+		Listener *sub
+	)
+	: m_Sub(sub)
+	, m_bIncludeDescendants(includeDescendants)
+	, m_DesiredScope(ll)
+	{
+		
+	}
+	
+	void OnEnterStruct() override {
+		m_CurScope.push_back(m_LastKey);
+		UpdateListening();
+		if(m_bListening) m_Sub->OnEnterStruct();
+	}
+	
+	void OnStructField(std::string_view name) override {
+		if(m_bListening) m_Sub->OnStructField(name);
+		
+		//if(name.size() >= 2 && name[0] == 'm' && name[1] == '_') name.remove_prefix(2);
+		m_LastKey = name;
+	}
+	
+	void OnExitStruct() override {
+		if(m_bListening) m_Sub->OnExitStruct();
+		
+		m_CurScope.pop_back();
+		UpdateListening();
+	}
+	
+	void OnEnterArray() override {
+		m_CurScope.push_back(m_LastKey);
+		UpdateListening();
+		if(m_bListening) m_Sub->OnEnterArray();
+	}
+	
+	void OnExitArray() override {
+		if(m_bListening) m_Sub->OnExitArray();
+		
+		m_CurScope.pop_back();
+		UpdateListening();
+	}
+	
+	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {
+		m_LastKey = "";
+		if(m_bListening) m_Sub->OnEvent(gameloop, userid, name);
+	}
+	
+	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {
+		if(m_bListening) m_Sub->OnEventEnd(gameloop, userid, name);
+	}
+	
+	void OnEnterUserType(std::string_view name) override {
+		if(m_bListening) m_Sub->OnEnterUserType(name);
+	}
+	
+	void OnExitUserType(std::string_view name) override {
+		if(m_bListening) m_Sub->OnExitUserType(name);
+	}
+	
+	void OnValueNull() override {
+		if(m_bListening) m_Sub->OnValueNull();
+	}
+	
+	void OnValueInt(int64_t value) override {
+		if(m_bListening) m_Sub->OnValueInt(value);
+	}
+	
+	void OnValueString(std::string_view value) override {
+		if(m_bListening) m_Sub->OnValueString(value);
+	}
+	
+	void OnValueBits(std::vector<uint8_t> value) override {
+		if(m_bListening) m_Sub->OnValueBits(value);
+	}
+	
+private:
+	void UpdateListening(){
+		bool nextListening = false;
+		
+		auto curScopeBegin = m_CurScope.begin();
+		
+		// When an event is being streamed, we enter a structure we no name
+		// Let's skip it for the purposes of checking if we're listening
+		if(curScopeBegin != m_CurScope.end() && curScopeBegin->empty()){
+			++curScopeBegin;
+		}
+		
+		auto curScopeSize = m_CurScope.end() - curScopeBegin;
+		
+		if(m_bIncludeDescendants){
+			if(curScopeSize >= m_DesiredScope.size()){
+				nextListening = std::equal(m_DesiredScope.begin(), m_DesiredScope.end(), curScopeBegin);
+			}
+		}else{
+			if(curScopeSize == m_DesiredScope.size()){
+				nextListening = std::equal(m_DesiredScope.begin(), m_DesiredScope.end(), curScopeBegin);
+			}
+		}
+		
+		if(nextListening != m_bListening){
+			m_bListening = nextListening;
+			
+			// Is this needed?
+			if(m_bListening){
+				OnStructField(m_LastKey);
+			}
+		}
+	}
+	
+	bool m_bListening = false;
+	bool m_bIgnoreNextStruct = false;
+	
+	std::vector<std::string> m_DesiredScope;
+	bool m_bIncludeDescendants;
+	Listener *m_Sub;
+	
+	std::string_view m_LastKey;
+	std::vector<std::string_view> m_CurScope;
 };
 
 #endif
