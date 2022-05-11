@@ -174,8 +174,8 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 	auto tracker = GetTrackerListener(out);
 	listeners.tracker = &tracker;
 	
-	auto game = GetGameListener(out);
-	listeners.game = &game;
+	//auto game = GetGameListener(out);
+	//listeners.game = &game;
 	
 	auto detailsJSON = JSONBuilderListener(true);
 	listeners.details = &detailsJSON;
