@@ -90,17 +90,28 @@ BroadcastListener GetDetailsListener(){
 int main(){
 	SC2ReplayListeners listeners;
 	
-	auto tracker = GetTrackerListener();
-	listeners.tracker = &tracker;
+	//auto tracker = GetTrackerListener();
+	//listeners.tracker = &tracker;
 	
 	auto game = GetGameListener();
 	listeners.game = &game;
 	
-	auto details = GetDetailsListener();
+	auto details = JSONBuilderListener();
 	listeners.details = &details;
+	
+	auto header = JSONBuilderListener();
+	listeners.header = &header;
 	
 	if(!LoadSC2Replay("bin/test.SC2Replay", listeners)){
 		return 1;
+	}
+	
+	for(auto &v : details.GetJSON()){
+		std::cout << v.serialize(true) << std::endl;
+	}
+	
+	for(auto &v : header.GetJSON()){
+		std::cout << v.serialize(true) << std::endl;
 	}
 	
 	return 0;

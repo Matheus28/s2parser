@@ -6,6 +6,8 @@
 #include <vector>
 #include <memory>
 
+#include "picojson.h"
+
 struct Listener {
 	virtual ~Listener(){}
 	
@@ -18,6 +20,9 @@ struct Listener {
 	virtual void OnEnterStruct() = 0;
 	virtual void OnStructField(std::string_view name) = 0;
 	virtual void OnExitStruct() = 0;
+	
+	virtual void OnEnterArray() = 0;
+	virtual void OnExitArray() = 0;
 	
 	virtual void OnValueNull() = 0;
 	virtual void OnValueInt(int64_t v) = 0;
@@ -35,6 +40,9 @@ struct NullListener : Listener {
 	void OnEnterStruct() override {}
 	void OnStructField(std::string_view name) override {}
 	void OnExitStruct() override {}
+	
+	void OnEnterArray() override {}
+	void OnExitArray() override {}
 	
 	void OnValueNull() override {}
 	void OnValueInt(int64_t v) override {}
@@ -77,6 +85,14 @@ struct BroadcastListener : Listener {
 		for(auto &v : m_Listeners) v->OnExitStruct();
 	}
 	
+	void OnEnterArray() override {
+		for(auto &v : m_Listeners) v->OnEnterArray();
+	}
+	
+	void OnExitArray() override {
+		for(auto &v : m_Listeners) v->OnExitArray();
+	}
+	
 	void OnValueNull() override {
 		for(auto &v : m_Listeners) v->OnValueNull();
 	}
@@ -95,6 +111,93 @@ struct BroadcastListener : Listener {
 	
 private:
 	std::vector<std::unique_ptr<Listener>> m_Listeners;
+};
+
+struct JSONBuilderListener : NullListener {
+	JSONBuilderListener(){
+		stack.emplace_back(picojson::array());
+	}
+	
+	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {}
+	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {}
+	
+	void OnEnterUserType(std::string_view name) override {}
+	void OnExitUserType(std::string_view name) override {}
+	
+	void OnEnterStruct() override {
+		keys.push_back(lastKey);
+		stack.emplace_back(picojson::object());
+	}
+	
+	void OnStructField(std::string_view name) override {
+		lastKey = name;
+	}
+	
+	void OnExitStruct() override {
+		auto v = std::move(stack.back());
+		stack.pop_back();
+		assert(v.is<picojson::object>());
+		
+		assert(!keys.empty());
+		lastKey = std::move(keys.back());
+		keys.pop_back();
+		
+		OnValue(std::move(v));
+	}
+	
+	void OnEnterArray() override {
+		keys.push_back(lastKey);
+		stack.emplace_back(picojson::array());
+	}
+	
+	void OnExitArray() override {
+		auto v = std::move(stack.back());
+		stack.pop_back();
+		assert(v.is<picojson::array>());
+		
+		assert(!keys.empty());
+		lastKey = std::move(keys.back());
+		keys.pop_back();
+		
+		OnValue(std::move(v));
+	}
+	
+	void OnValueNull() override {
+		OnValue(picojson::value());
+	}
+	
+	void OnValueInt(int64_t v) override {
+		OnValue(picojson::value(v));
+	}
+	
+	void OnValueString(std::string_view v) override {
+		OnValue(picojson::value(std::string(v)));
+	}
+	
+	void OnValueBits(std::vector<uint8_t> v) override {
+		OnValue(picojson::value(std::string((char*) v.data(), v.size())));
+	}
+	
+	const picojson::array& GetJSON(){
+		assert(stack.size() == 1);
+		return stack.back().get<picojson::array>();
+	}
+	
+private:
+	void OnValue(picojson::value v){
+		assert(!stack.empty());
+		if(stack.back().is<picojson::object>()){
+			stack.back().get<picojson::object>()[std::string(lastKey)] = v;
+		}else if(stack.back().is<picojson::array>()){
+			stack.back().get<picojson::array>().push_back(v);
+		}else{
+			assert(false);
+		}
+	}
+	
+	std::string_view lastKey = "";
+	std::vector<std::string_view> keys;
+	std::vector<picojson::value> stack;
 };
 
 struct BasicStructListener : NullListener {

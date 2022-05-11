@@ -478,7 +478,10 @@ private:
 				buf.ExpectSkip(7);
 			}
 			
-			listener->OnValueString(buf.ReadAlignedBytes(4));
+			uint32_t v;
+			auto str = buf.ReadAlignedBytes(4);
+			memcpy(&v, str.data(), 4);
+			listener->OnValueInt(v);
 		}
 	};
 	
@@ -527,6 +530,7 @@ private:
 		std::unique_ptr<Type> elemType;
 		
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnEnterArray();
 			if(versioned){
 				buf.ExpectSkip(0);
 				auto len = buf.Vint();
@@ -540,6 +544,7 @@ private:
 					elemType->Decode(versioned, buf, listener);
 				}
 			}
+			listener->OnExitArray();
 		}
 	};
 	
@@ -706,7 +711,7 @@ private:
 			int64_t value = std::stoll(json::AssertReach<std::string>(v, {"value", "value"}));
 			
 			if(value >= decl->valueToName.size()) decl->valueToName.resize(value+1);
-			decl->valueToName[value] = json::AssertReach<std::string>(v, {"fullname"});
+			decl->valueToName[value] = json::AssertReach<std::string>(v, {"name"});
 			
 			double valuef = std::stod(json::AssertReach<std::string>(v, {"value", "value"}));
 			minValue = std::min(minValue, valuef);
