@@ -550,25 +550,31 @@ template <typename Iter> void serialize_str(const std::string &s, Iter oi) {
       if(static_cast<unsigned char>(c) >= 0x7f){
           uint32_t codepoint = 0;
           
-          if((uint8_t(s[0]) & 0xe0) == 0xc0) {
+          if((uint8_t(s[i]) & 0xe0) == 0xc0) {
             if(i+1 < s.size()){
               codepoint = (uint32_t(uint8_t(s[i+0]) & 0x1f) << 6) | (uint32_t(uint8_t(s[i+1]) & 0x3f) << 0);
               i += 1;
+            }else{ // incomplete character at the end of string... don't print it
+              goto EndOfString;
             }
-          } else if ((uint8_t(s[0]) & 0xf0) == 0xe0) {
+          } else if ((uint8_t(s[i]) & 0xf0) == 0xe0) {
             if(i+2 < s.size()){
               codepoint = (uint32_t(uint8_t(s[i+0]) & 0x0f) << 12) | (uint32_t(uint8_t(s[i+1]) & 0x3f) << 6) | (uint32_t(uint8_t(s[i+2]) & 0x3f) << 0);
               i += 2;
+            }else{ // incomplete character at the end of string... don't print it
+              goto EndOfString;
             }
-          } else if ((uint8_t(s[0]) & 0xf8) == 0xf0 && (uint8_t(s[0]) <= 0xf4)) {
+          } else if ((uint8_t(s[i]) & 0xf8) == 0xf0 && (uint8_t(s[i]) <= 0xf4)) {
             if(i+3 < s.size()){
               codepoint = (uint32_t(uint8_t(s[i+0]) & 0x07) << 18) | (uint32_t(uint8_t(s[i+1]) & 0x3f) << 12) | (uint32_t(uint8_t(s[i+2]) & 0x3f) << 6) | (uint32_t(uint8_t(s[i+3]) & 0x3f) << 0);
               i += 3;
+            }else{ // incomplete character at the end of string... don't print it
+              goto EndOfString;
             }
           }
           
-          if(codepoint >= 0xd800 && codepoint <= 0xdfff) codepoint = 0; // surrogate
-              
+          if(codepoint >= 0xd800 && codepoint <= 0xdfff) break; // break switch. Surrogate... shouldn't happen but in that case just skip it
+          
           if(codepoint != 0){
             char buf[7];
             SNPRINTF(buf, sizeof(buf), "\\u%04" PRIx32, codepoint & 0xffff);
@@ -588,6 +594,7 @@ template <typename Iter> void serialize_str(const std::string &s, Iter oi) {
     }
   }
   
+EndOfString:
   *oi++ = '"';
 }
 
