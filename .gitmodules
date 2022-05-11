@@ -4,3 +4,6 @@
 [submodule "stormlib"]
 	path = stormlib
 	url = https://github.com/ladislav-zezula/StormLib.git
+[submodule "httplib"]
+	path = httplib
+	url = https://github.com/yhirose/cpp-httplib.git
