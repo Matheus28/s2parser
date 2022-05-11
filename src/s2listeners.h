@@ -173,7 +173,12 @@ struct JSONBuilderListener : NullListener {
 		OnValue(picojson::value(std::string((char*) v.data(), v.size())));
 	}
 	
-	const picojson::array& GetJSON(){
+	picojson::array& GetJSON(){
+		assert(m_Stack.size() == 1);
+		return m_Stack.back().get<picojson::array>();
+	}
+	
+	const picojson::array& GetJSON() const {
 		assert(m_Stack.size() == 1);
 		return m_Stack.back().get<picojson::array>();
 	}

@@ -11,6 +11,10 @@
 #include <fstream>
 #include <iomanip>
 
+#ifndef _WIN32
+#include <dirent.h>
+#endif
+
 inline std::optional<std::string> GetMPQFile(HANDLE mpq, const char *filename){
 	HANDLE file;
 	if(!SFileOpenFileEx(mpq, filename, 0, &file) || !file) return {};
@@ -34,15 +38,55 @@ inline std::optional<std::string> GetMPQFile(HANDLE mpq, const char *filename){
 	return ret;
 }
 
+inline std::string& GetProtocolsDir(){
+	static std::string v = "s2protocol/json";
+	return v;
+}
+
 inline uint32_t GetLatestProtocolVersion(){
-	return 87702;
+	static uint32_t v = []() -> uint32_t {
+#ifndef _WIN32
+		DIR *dir;
+		if(auto dir = opendir(GetProtocolsDir().c_str())){
+			uint32_t highestVersion = 0;
+			
+			struct dirent *ent;
+			while((ent = readdir(dir)) != nullptr) {
+				unsigned int value;
+				if(sscanf(ent->d_name, "protocol%u.json", &value) == 1){
+					highestVersion = std::max(highestVersion, (uint32_t) value);
+				}
+			}
+			
+			closedir(dir);
+			
+			if(highestVersion == 0){
+				std::cerr << "Protocol directory doesn't seem to have any protocols? " << GetProtocolsDir() << std::endl;
+				exit(1);
+			}
+			
+			return highestVersion;
+		} else {
+			std::cerr << "Protocol directory invalid: " << GetProtocolsDir() << std::endl;
+			exit(1);
+		}
+#else
+		std::cerr << "Add this code for windows lol" << std::endl;
+		abort();
+		return -1; // FIXME
+#endif
+	}();
+	
+	return v;
 }
 
 inline std::optional<ProtocolParser> LoadProtocol(uint32_t version){
 	std::stringstream filename;
-	filename << "s2protocol/json/protocol" << version << ".json";
+	filename << GetProtocolsDir() << "/protocol" << version << ".json";
 	
 	std::ifstream in{filename.str()};
+	if(in.bad() || !in.is_open()) return {};
+	
 	ProtocolParser p;
 	if(!p.Init(in)) return {};
 	
@@ -50,7 +94,16 @@ inline std::optional<ProtocolParser> LoadProtocol(uint32_t version){
 }
 
 inline ProtocolParser& GetLatestProtocolParser(){
-	static auto v = *LoadProtocol(GetLatestProtocolVersion());
+	static ProtocolParser v = [](){
+		auto v = LoadProtocol(GetLatestProtocolVersion());
+		if(!v){
+			std::cerr << "Couldn't load latest protocol, this is bad. See you on the other side" << std::endl;
+			abort();
+		}
+		
+		return std::move(*v);
+	}();
+	
 	return v;
 }
 
@@ -128,57 +181,71 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 	}
 	
 	ProtocolParser *replayProtocol = nullptr;
-	std::optional<ProtocolParser> replayProtocolContainer;
 	
 	if(baseBuild == GetLatestProtocolVersion()){
 		replayProtocol = &GetLatestProtocolParser();
 	}else{
 		// We need to load the right protocol version for this
-		replayProtocolContainer = LoadProtocol(baseBuild);
-		if(!replayProtocolContainer){
-			std::cerr << "We don't have a decoder for protocol " << baseBuild << std::endl;
-			return 1;
-		}
+		static std::unordered_map<uint32_t, ProtocolParser> protocolCache;
 		
-		replayProtocol = &*replayProtocolContainer;
+		if(auto it = protocolCache.find(baseBuild); it != protocolCache.end()){
+			replayProtocol = &it->second;
+		}else{
+			auto tmp = LoadProtocol(baseBuild);
+			if(!tmp){
+				std::cerr << "We don't have a decoder for protocol " << baseBuild << std::endl;
+				return false;
+			}
+			
+			const auto &p = protocolCache.emplace(baseBuild, std::move(*tmp));
+			replayProtocol = &p.first->second;
+		}
 	}
 	
 	if(listeners.header){
-		replayProtocol->DecodeInstance(userData, true, "NNet.Replay.SHeader", listeners.header);
+		if(!replayProtocol->DecodeInstance(userData, true, "NNet.Replay.SHeader", listeners.header)){
+			return false;
+		}
 	}
 	
 	if(listeners.tracker){
 		if(auto str = GetMPQFile(mpq.get(), "replay.tracker.events")){
-			replayProtocol->DecodeEventStream(
+			if(!replayProtocol->DecodeEventStream(
 				*str,
 				true,
 				"NNet.Replay.Tracker.EEventId",
 				false,
 				listeners.tracker
-			);
+			)){
+				return false;
+			}
 		}
 	}
 	
 	if(listeners.game){
 		if(auto str = GetMPQFile(mpq.get(), "replay.game.events")){
-			replayProtocol->DecodeEventStream(
+			if(!replayProtocol->DecodeEventStream(
 				*str,
 				false,
 				"NNet.Game.EEventId",
 				true,
 				listeners.game
-			);
+			)){
+				return false;
+			}
 		}
 	}
 	
 	if(listeners.details){
 		if(auto str = GetMPQFile(mpq.get(), "replay.details")){
-			replayProtocol->DecodeInstance(
+			if(!replayProtocol->DecodeInstance(
 				*str,
 				true,
 				"NNet.Game.SDetails",
 				listeners.details
-			);
+			)){
+				return false;
+			}
 		}
 	}
 	

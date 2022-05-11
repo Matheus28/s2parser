@@ -87,7 +87,82 @@ BroadcastListener GetDetailsListener(){
 	return r;
 }
 
-int main(){
+// Returns region for this entry
+std::string PatchUpCacheHandle(std::string &str){
+	auto view = std::string_view(str);
+	
+	auto Trim = [&](std::string_view &v){
+		while(!v.empty() && (v.front() == 0 || v.front() == ' ')) v.remove_prefix(1);
+		while(!v.empty() && (v.back() == 0 || v.back() == ' ')) v.remove_suffix(1);
+	};
+	
+	static auto NibletToChar = [](uint8_t v) -> char{
+		switch(v){
+			case 0: return '0';
+			case 1: return '1';
+			case 2: return '2';
+			case 3: return '3';
+			case 4: return '4';
+			case 5: return '5';
+			case 6: return '6';
+			case 7: return '7';
+			case 8: return '8';
+			case 9: return '9';
+			case 10: return 'a';
+			case 11: return 'b';
+			case 12: return 'c';
+			case 13: return 'd';
+			case 14: return 'e';
+			case 15: return 'f';
+			default: return '?';
+		}
+	};
+
+	
+	// s2ma or whatever
+	auto type = view.substr(0,4);
+	Trim(type);
+	
+	// US and such
+	auto regionView = view.substr(4,4);
+	Trim(regionView);
+	
+	auto region = std::string(regionView);
+	std::transform(region.begin(), region.end(), region.begin(), [](int ch){
+		// Only works for ascii but who cares
+		if(ch >= 'A' && ch <= 'Z') return ch - ('Z' - 'z');
+		return ch;
+	});
+	
+	auto hashView = view.substr(8);
+	
+	{
+		std::string_view scheme = "https";
+		std::string_view domain = "classic.blizzard.com";
+		if(region == "sea") region = "us";
+		if(region == "cn"){
+			scheme = "http";
+			domain = "battlenet.com.cn";
+		}
+		
+		std::stringstream ss;
+		ss << scheme << "://" << region << "-s2-depot." << domain << "/";
+		
+		for(auto &v : hashView){
+			uint8_t vv = (uint8_t) v;
+			ss.put(NibletToChar((vv>>4) & 0xf));
+			ss.put(NibletToChar(vv & 0xf));
+		}
+		
+		ss << "." << type;
+		
+		str = ss.str();
+	}
+	
+	return region;
+}
+
+bool ProcessReplay(const char *filename, std::ostream &out){
 	SC2ReplayListeners listeners;
 	
 	//auto tracker = GetTrackerListener();
@@ -96,24 +171,69 @@ int main(){
 	//auto game = GetGameListener();
 	//listeners.game = &game;
 	
-	auto details = JSONBuilderListener(false);
-	listeners.details = &details;
+	auto detailsJSON = JSONBuilderListener(true);
+	listeners.details = &detailsJSON;
 	
-	auto headerJSON = JSONBuilderListener(false);
-	auto header = ScopeFilterListener({"m_version"}, true, &headerJSON);
-	listeners.header = &header;
+	auto headerJSON = JSONBuilderListener(true);
+	listeners.header = &headerJSON;
 	
-	if(!LoadSC2Replay("bin/test.SC2Replay", listeners)){
+	if(!LoadSC2Replay(filename, listeners)){
+		return false;
+	}
+	
+	if(detailsJSON.GetJSON().empty()) return false;
+	if(headerJSON.GetJSON().empty()) return false;
+	
+	std::string region;
+	
+	{
+		if(!detailsJSON.GetJSON().back().is<picojson::object>()) return false;
+		
+		auto &detailsObj = detailsJSON.GetJSON().back().get<picojson::object>();
+		auto it = detailsObj.find("cacheHandles");
+		if(it == detailsObj.end()) return false;
+		if(!it->second.is<picojson::array>()) return false;
+		for(auto &v : it->second.get<picojson::array>()){
+			region = PatchUpCacheHandle(v.get<std::string>());
+		}
+		
+		
+		if(region.empty()){
+			// local replay
+		}
+	}
+	
+	out << detailsJSON.GetJSON().back().serialize(true) << "\n";
+	out << headerJSON.GetJSON().back().serialize(true) << "\n";
+	
+	{
+		picojson::object extraData;
+		
+		extraData["region"] = region.empty() ? picojson::value() : picojson::value(region);
+		
+		out << "{\"type\":\"extra\",\"data\":" << picojson::value(std::move(extraData)).serialize() << "}\n";
+	}
+	
+	return true;
+}
+
+int main(int argc, const char *argv[]){
+	const char *filename = nullptr;
+	const char *protocols = nullptr;
+	
+	if(argc == 2){
+		filename = argv[1];
+	}else if(argc == 3){
+		protocols = argv[1];
+		filename = argv[2];
+	}else{
+		std::cerr << "Usage: " << argv[0] << " [path to protocols dir] <filename>" << std::endl;
+		std::cerr << "Hint: by default the path to protocols dir is s2protocol/json/, which assumes you're running the executable from the root of the project" << std::endl;
 		return 1;
 	}
 	
-	for(auto &v : details.GetJSON()){
-		//std::cout << v.serialize(true) << std::endl;
-	}
 	
-	for(auto &v : headerJSON.GetJSON()){
-		std::cout << v.serialize(true) << std::endl;
-	}
+	if(protocols != nullptr) GetProtocolsDir() = protocols;
 	
-	return 0;
+	return ProcessReplay(filename, std::cout) ? 0 : 1;
 }
