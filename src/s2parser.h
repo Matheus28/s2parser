@@ -8,42 +8,7 @@
 
 #include "picojson.h"
 #include "json_utils.h"
-
-struct Listener {
-	virtual ~Listener(){}
-	
-	virtual void OnEvent(int64_t gameloop, int userid, std::string_view name) = 0;
-	virtual void OnEventEnd(int64_t gameloop, int userid, std::string_view name) = 0;
-	
-	virtual void OnEnterUserType(std::string_view name) = 0;
-	virtual void OnExitUserType(std::string_view name) = 0;
-	
-	virtual void OnEnterStruct() = 0;
-	virtual void OnStructField(std::string_view name) = 0;
-	virtual void OnExitStruct() = 0;
-	
-	virtual void OnValueNull() = 0;
-	virtual void OnValueInt(int64_t v) = 0;
-	virtual void OnValueString(std::string_view) = 0;
-	virtual void OnValueBits(std::vector<uint8_t>) = 0;
-};
-
-struct NullListener : Listener {
-	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {}
-	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {}
-	
-	void OnEnterUserType(std::string_view name) override {}
-	void OnExitUserType(std::string_view name) override {}
-	
-	void OnEnterStruct() override {}
-	void OnStructField(std::string_view name) override {}
-	void OnExitStruct() override {}
-	
-	void OnValueNull() override {}
-	void OnValueInt(int64_t v) override {}
-	void OnValueString(std::string_view) override {}
-	void OnValueBits(std::vector<uint8_t>) override {}
-};
+#include "s2listeners.h"
 
 // This is ported from s2protocol
 struct BitPackedBuffer {
