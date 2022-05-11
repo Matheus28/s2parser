@@ -1,11 +1,12 @@
-ifeq ($(OS),Windows_NT)
-	EXECUTABLE_EXT = .exe
-endif
+INC_FLAGS := -Isrc/
+INC_FLAGS += -Ihttplib/
 
+SHARED_FLAGS := -g3 -std=c++17 -pthread $(INC_FLAGS) $(CFLAGS) $(CXXFLAGS)
+LIBS = -lstorm
 
 prod:
-	mkdir -p bin && clang++ -g3 -O3 -std=c++17 src/main.cpp -lstorm -o bin/s2parser$(EXECUTABLE_EXT)
+	mkdir -p bin && $(CXX) -O3 $(SHARED_FLAGS) src/main.cpp $(LIBS) -o bin/s2parser
 	
 debug:
-	mkdir -p bin && clang++ -g3 -std=c++17 src/main.cpp -lstorm -o bin/s2parser$(EXECUTABLE_EXT)
+	mkdir -p bin && $(CXX)     $(SHARED_FLAGS) src/main.cpp $(LIBS) -o bin/s2parser
 	

@@ -11,4 +11,4 @@ COPY . /root/
 WORKDIR /root/
 RUN make
 
-CMD ["./bin/s2parser"]
+CMD ["./bin/s2parser", "--http"]

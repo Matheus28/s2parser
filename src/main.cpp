@@ -2,6 +2,8 @@
 
 #include "s2loader.h"
 
+#include "httplib.h"
+
 int64_t WindowsToUnixTimestamp(int64_t v){
 	return (v - 116444735995904000) / 10000000;
 }
@@ -234,6 +236,18 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 	return true;
 }
 
+#ifdef _WIN32
+// Just to get intellisense to work, we don't compile on windows
+char *mkdtemp(char *v){
+	strcpy(v, "C:\\tmp\\");
+	return v;
+}
+
+int rmdir(const char *pathname){
+	return RemoveDirectoryA(pathname) == 0;
+}
+#endif
+
 int main(int argc, const char *argv[]){
 	const char *filename = nullptr;
 	const char *protocols = nullptr;
@@ -251,6 +265,54 @@ int main(int argc, const char *argv[]){
 	
 	
 	if(protocols != nullptr) GetProtocolsDir() = protocols;
+	
+	if(strcmp(filename, "--http") == 0){
+		httplib::Server server;
+		
+		server.set_payload_max_length(5 * 1024 * 1024); // 5 MiB
+		
+		server.Get("/", [](const httplib::Request &, httplib::Response &res){
+			res.set_content("Hi\n", "text/plain");
+		});
+		
+		server.Post("/", [](const httplib::Request &req, httplib::Response &res){
+			char dirname[] = "sc2replay-XXXXXX";
+			if(mkdtemp(dirname) == nullptr){
+				res.status = 500;
+				res.set_content("Server failed to create directory\n", "text/plain");
+				return;
+			}
+			
+			char filename[64];
+			snprintf(filename, sizeof(filename), "%s/file.SC2Replay", dirname);
+			
+			auto f = fopen(filename, "wb");
+			if(!f){
+				res.status = 500;
+				res.set_content("Server failed to create file\n", "text/plain");
+				rmdir(dirname);
+				return;
+			}
+			
+			fwrite(req.body.data(), 1, req.body.size(), f);
+			fclose(f);
+			
+			std::stringstream ss;
+			if(ProcessReplay(filename, ss)){
+				res.set_content(ss.str(), "application/json");
+			}else{
+				res.status = 400;
+				res.set_content("Bad replay\n", "text/plain");
+			}
+			
+			unlink(filename);
+			rmdir(dirname);
+		});
+		
+		std::cout << "Starting http server on port 8080" << std::endl;
+		server.listen("0.0.0.0", 8080);
+		return 0;
+	}
 	
 	return ProcessReplay(filename, std::cout) ? 0 : 1;
 }
