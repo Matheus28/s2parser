@@ -571,7 +571,7 @@ template <typename Iter> void serialize_str(const std::string &s, Iter oi) {
               
           if(codepoint != 0){
             char buf[7];
-            SNPRINTF(buf, sizeof(buf), "\\u%04" PRIu32, codepoint);
+            SNPRINTF(buf, sizeof(buf), "\\u%04" PRIx32, codepoint & 0xffff);
             copy(buf, buf + 6, oi);
             break; // switch, so we don't fall to the code below
           }
