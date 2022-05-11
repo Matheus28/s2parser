@@ -435,10 +435,10 @@ private:
 			if(versioned){
 				buf.ExpectSkip(2);
 				auto len = buf.Vint();
-				listener->OnValueString(buf.ReadAlignedBytes(len));
+				listener->OnValueBlob(buf.ReadAlignedBytes(len));
 			}else{
 				auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
-				listener->OnValueString(buf.ReadAlignedBytes(len));
+				listener->OnValueBlob(buf.ReadAlignedBytes(len));
 			}
 		}
 		
@@ -448,8 +448,19 @@ private:
 		}
 	};
 	
-	struct StringType : BlobType {
+	struct StringType : TypeWithBounds {
 		bool ascii = false;
+		
+		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+			if(versioned){
+				buf.ExpectSkip(2);
+				auto len = buf.Vint();
+				listener->OnValueString(buf.ReadAlignedBytes(len));
+			}else{
+				auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
+				listener->OnValueString(buf.ReadAlignedBytes(len));
+			}
+		}
 		
 		void Print(std::ostream &out) override {
 			out << "string";

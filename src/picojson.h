@@ -43,6 +43,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <inttypes.h>
 
 // for isnan/isinf
 #if __cplusplus >= 201103L
@@ -528,10 +529,11 @@ template <typename Iter> void copy(const std::string &s, Iter oi) {
   std::copy(s.begin(), s.end(), oi);
 }
 
-template <typename Iter> struct serialize_str_char {
-  Iter oi;
-  void operator()(char c) {
-    switch (c) {
+template <typename Iter> void serialize_str(const std::string &s, Iter oi) {
+  *oi++ = '"';
+  for(size_t i = 0; i < s.size(); ++i){
+    char c = s[i];
+    switch(c){
 #define MAP(val, sym)                                                                                                              \
   case val:                                                                                                                        \
     copy(sym, oi);                                                                                                                 \
@@ -545,22 +547,47 @@ template <typename Iter> struct serialize_str_char {
       MAP('\t', "\\t");
 #undef MAP
     default:
-      if (static_cast<unsigned char>(c) < 0x20 || c == 0x7f) {
+      if(static_cast<unsigned char>(c) >= 0x7f){
+          uint32_t codepoint = 0;
+          
+          if((uint8_t(s[0]) & 0xe0) == 0xc0) {
+            if(i+1 < s.size()){
+              codepoint = (uint32_t(uint8_t(s[i+0]) & 0x1f) << 6) | (uint32_t(uint8_t(s[i+1]) & 0x3f) << 0);
+              i += 1;
+            }
+          } else if ((uint8_t(s[0]) & 0xf0) == 0xe0) {
+            if(i+2 < s.size()){
+              codepoint = (uint32_t(uint8_t(s[i+0]) & 0x0f) << 12) | (uint32_t(uint8_t(s[i+1]) & 0x3f) << 6) | (uint32_t(uint8_t(s[i+2]) & 0x3f) << 0);
+              i += 2;
+            }
+          } else if ((uint8_t(s[0]) & 0xf8) == 0xf0 && (uint8_t(s[0]) <= 0xf4)) {
+            if(i+3 < s.size()){
+              codepoint = (uint32_t(uint8_t(s[i+0]) & 0x07) << 18) | (uint32_t(uint8_t(s[i+1]) & 0x3f) << 12) | (uint32_t(uint8_t(s[i+2]) & 0x3f) << 6) | (uint32_t(uint8_t(s[i+3]) & 0x3f) << 0);
+              i += 3;
+            }
+          }
+          
+          if(codepoint >= 0xd800 && codepoint <= 0xdfff) codepoint = 0; // surrogate
+              
+          if(codepoint != 0){
+            char buf[7];
+            SNPRINTF(buf, sizeof(buf), "\\u%04" PRIu32, codepoint);
+            copy(buf, buf + 6, oi);
+            break; // switch, so we don't fall to the code below
+          }
+      }
+      
+      if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) >= 0x7f) {
         char buf[7];
-        SNPRINTF(buf, sizeof(buf), "\\u%04x", c & 0xff);
+        SNPRINTF(buf, sizeof(buf), "\\u%04x", ((unsigned char) c) & 0xff);
         copy(buf, buf + 6, oi);
-      } else {
+      }else{
         *oi++ = c;
       }
       break;
     }
   }
-};
-
-template <typename Iter> void serialize_str(const std::string &s, Iter oi) {
-  *oi++ = '"';
-  serialize_str_char<Iter> process_char = {oi};
-  std::for_each(s.begin(), s.end(), process_char);
+  
   *oi++ = '"';
 }
 

@@ -200,7 +200,18 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 		if(it == detailsObj.end()) return false;
 		if(!it->second.is<picojson::array>()) return false;
 		for(auto &v : it->second.get<picojson::array>()){
-			region = PatchUpCacheHandle(v.get<std::string>());
+			if(!v.is<picojson::array>()) return false;
+			
+			auto &blob = v.get<picojson::array>();
+			
+			std::string str;
+			str.resize(blob.size());
+			for(size_t i = 0; i < blob.size(); ++i){
+				str[i] = (char) (uint8_t) blob[i].get<int64_t>();
+			}
+			
+			region = PatchUpCacheHandle(str);
+			v = picojson::value(std::move(str));
 		}
 		
 		

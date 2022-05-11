@@ -28,6 +28,7 @@ struct Listener {
 	virtual void OnValueNull() = 0;
 	virtual void OnValueInt(int64_t v) = 0;
 	virtual void OnValueString(std::string_view) = 0;
+	virtual void OnValueBlob(std::string_view) = 0;
 	virtual void OnValueBits(std::vector<uint8_t>) = 0;
 };
 
@@ -48,6 +49,7 @@ struct NullListener : Listener {
 	void OnValueNull() override {}
 	void OnValueInt(int64_t v) override {}
 	void OnValueString(std::string_view) override {}
+	void OnValueBlob(std::string_view) override {}
 	void OnValueBits(std::vector<uint8_t>) override {}
 };
 
@@ -104,6 +106,10 @@ struct BroadcastListener : Listener {
 	
 	void OnValueString(std::string_view value) override {
 		for(auto &v : m_Listeners) v->OnValueString(value);
+	}
+	
+	void OnValueBlob(std::string_view value) override {
+		for(auto &v : m_Listeners) v->OnValueBlob(value);
 	}
 	
 	void OnValueBits(std::vector<uint8_t> value) override {
@@ -168,6 +174,17 @@ struct JSONBuilderListener : NullListener {
 	
 	void OnValueString(std::string_view v) override {
 		OnValue(picojson::value(std::string(v)));
+	}
+	
+	void OnValueBlob(std::string_view v) override {
+		picojson::array arr;
+		arr.resize(v.size());
+		size_t i = 0;
+		for(char ch : v){
+			arr[i++] = picojson::value((int64_t) uint8_t(ch));
+		}
+		
+		OnValue(picojson::value(std::move(arr)));
 	}
 	
 	void OnValueBits(std::vector<uint8_t> v) override {
