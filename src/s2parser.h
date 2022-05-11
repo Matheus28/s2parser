@@ -215,9 +215,7 @@ struct ProtocolParser {
 		auto buf = BitPackedBuffer(data);
 		
 		listener->OnEvent(0, -1, typeName);
-		listener->OnEnterUserType(typeName);
 		type->Decode(versioned, buf, listener);
-		listener->OnExitUserType(typeName);
 		listener->OnEventEnd(0, -1, typeName);
 		
 		return true;
@@ -316,9 +314,7 @@ struct ProtocolParser {
 			}
 			
 			listener->OnEvent(gameloop, userid, eventIDToType[eventID].first);
-			listener->OnEnterUserType(eventIDToType[eventID].first);
 			eventIDToType[eventID].second->Decode(versioned, buf, listener);
-			listener->OnExitUserType(eventIDToType[eventID].first);
 			listener->OnEventEnd(gameloop, userid, eventIDToType[eventID].first);
 			
 			// Next event is byte aligned
@@ -329,11 +325,62 @@ struct ProtocolParser {
 	}
 	
 private:
+	struct UserType;
 	struct Type {
 		virtual ~Type(){}
 		virtual void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) = 0;
 		virtual void ResolveUserTypes(ProtocolParser *p){}
 		virtual void Print(std::ostream &out) = 0;
+		virtual UserType* ToUserType(){ return nullptr; }
+	};
+	
+	struct TypeHolderMultiple;
+	struct TypeHolderSingle {
+		Type* Own(std::unique_ptr<Type> p){
+			auto ret = p.get();
+			m_Owned = std::move(p);
+			return ret;
+		}
+		
+		void TransferOwnedTo(TypeHolderSingle *other){
+			if(m_Owned) other->Own(std::move(m_Owned));
+		}
+		
+		void TransferOwnedTo(TypeHolderMultiple *other);
+		
+		void DeleteOwned(){
+			m_Owned.reset();
+		}
+		
+	private:
+		std::unique_ptr<Type> m_Owned;
+	};
+	
+	struct TypeHolderMultiple {
+		Type* Own(std::unique_ptr<Type> p){
+			auto ret = p.get();
+			m_OwnedMultiple.push_back(std::move(p));
+			return ret;
+		}
+		
+		void TransferOwnedTo(TypeHolderSingle *other){
+			for(auto &v : m_OwnedMultiple){
+				other->Own(std::move(v));
+			}
+			
+			m_OwnedMultiple.clear();
+		}
+		
+		void TransferOwnedTo(TypeHolderMultiple *other){
+			for(auto &v : m_OwnedMultiple){
+				other->Own(std::move(v));
+			}
+			
+			m_OwnedMultiple.clear();
+		}
+		
+	private:
+		std::vector<std::unique_ptr<Type>> m_OwnedMultiple;
 	};
 	
 	struct TypeWithBounds : Type {
@@ -473,10 +520,11 @@ private:
 		Type *sub = nullptr; // Resolved in ResolveUserTypes
 		std::string_view fullname;
 		
+		UserType* ToUserType() override { return this; }
+		
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			listener->OnEnterUserType(fullname);
+			std::cerr << "Found a non-resolved user type, this is inefficient. Fix me\n";
 			sub->Decode(versioned, buf, listener);
-			listener->OnExitUserType(fullname);
 		}
 		
 		void ResolveUserTypes(ProtocolParser *p) override {
@@ -489,6 +537,11 @@ private:
 			sub = it->second.get();
 			
 			sub->ResolveUserTypes(p);
+			
+			// Skip user type over if possible
+			if(auto t = sub->ToUserType()){
+				sub = t->sub;
+			}
 		}
 		
 		void Print(std::ostream &out) override {
@@ -498,14 +551,14 @@ private:
 		}
 	};
 	
-	struct StructType : Type {
+	struct StructType : Type, TypeHolderMultiple {
 		struct Field {
 			int tag = -1;
 			std::string_view name;
-			std::unique_ptr<Type> type;
+			Type *type;
 		};
 		
-		std::vector<std::unique_ptr<Type>> parents;
+		std::vector<Type*> parents;
 		std::vector<Field> fields;
 		
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
@@ -551,10 +604,20 @@ private:
 		void ResolveUserTypes(ProtocolParser *p) override {
 			for(auto &v : parents){
 				v->ResolveUserTypes(p);
+				
+				if(auto t = v->ToUserType()){
+					//TODO: we could delete this UserType by removing it from owned...
+					v = t->sub;
+				}
 			}
 			
 			for(auto &v : fields){
 				v.type->ResolveUserTypes(p);
+				
+				if(auto t = v.type->ToUserType()){
+					//TODO: we could delete this UserType by removing it from owned...
+					v.type = t->sub;
+				}
 			}
 		}
 		
@@ -616,8 +679,8 @@ private:
 		}
 	};
 	
-	struct OptionalType : Type {
-		std::unique_ptr<Type> sub;
+	struct OptionalType : Type, TypeHolderSingle {
+		Type *sub;
 		
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
 			if(versioned){
@@ -634,6 +697,11 @@ private:
 		
 		void ResolveUserTypes(ProtocolParser *p) override {
 			sub->ResolveUserTypes(p);
+			
+			if(auto t = sub->ToUserType()){
+				sub = t->sub;
+				DeleteOwned();
+			}
 		}
 		
 		void Print(std::ostream &out) override {
@@ -643,8 +711,8 @@ private:
 		}
 	};
 	
-	struct ArrayType : TypeWithBounds {
-		std::unique_ptr<Type> elemType;
+	struct ArrayType : TypeWithBounds, TypeHolderSingle {
+		Type *elemType;
 		
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
 			listener->OnEnterArray();
@@ -666,6 +734,11 @@ private:
 		
 		void ResolveUserTypes(ProtocolParser *p) override {
 			elemType->ResolveUserTypes(p);
+			
+			if(auto t = elemType->ToUserType()){
+				elemType = t->sub;
+				DeleteOwned();
+			}
 		}
 		
 		void Print(std::ostream &out) override {
@@ -685,11 +758,11 @@ private:
 		}
 	};
 	
-	struct ChoiceType : TypeWithBounds {
+	struct ChoiceType : TypeWithBounds, TypeHolderMultiple {
 		struct Choice {
 			int tag = -1;
 			std::string name;
-			std::unique_ptr<Type> sub;
+			Type *sub;
 		};
 		
 		std::vector<Choice> choices;
@@ -718,6 +791,11 @@ private:
 		void ResolveUserTypes(ProtocolParser *p) override {
 			for(auto &v : choices){
 				v.sub->ResolveUserTypes(p);
+				
+				if(auto t = v.sub->ToUserType()){
+					//TODO: we could delete this UserType by removing it from owned...
+					v.sub = t->sub;
+				}
 			}
 		}
 		
@@ -897,7 +975,7 @@ private:
 		for(auto &v : json::AssertReach<picojson::array>(root, {"parents"})){
 			auto fieldType = json::AssertReach<std::string>(v, {"type"});
 			if(fieldType == "ParentStructField"){
-				decl->parents.emplace_back(ParseTypeInfo(json::AssertReach<picojson::value>(v, {"type_info"})));
+				decl->parents.emplace_back(decl->Own(ParseTypeInfo(json::AssertReach<picojson::value>(v, {"type_info"}))));
 			}else{
 				std::cerr << "Wtf is this field inside a struct parent? " << fieldType << std::endl;
 				abort();
@@ -920,7 +998,7 @@ private:
 				}
 				
 				field.name = json::AssertReach<std::string>(v, {"name"});
-				field.type = ParseTypeInfo(json::AssertReach<picojson::value>(v, {"type_info"}));
+				field.type = decl->Own(ParseTypeInfo(json::AssertReach<picojson::value>(v, {"type_info"})));
 				decl->fields.emplace_back(std::move(field));
 			}else{
 				std::cerr << "Wtf is this field inside a struct? " << fieldType << std::endl;
@@ -957,7 +1035,7 @@ private:
 			
 			ChoiceType::Choice choice;
 			choice.name = json::AssertReach<std::string>(v, {"name"});
-			choice.sub = ParseTypeInfo(json::AssertReach<picojson::value>(v, {"type_info"}));
+			choice.sub = decl->Own(ParseTypeInfo(json::AssertReach<picojson::value>(v, {"type_info"})));
 			
 			if(tag >= decl->choices.size()){
 				decl->choices.resize(tag + 1);
@@ -1011,7 +1089,7 @@ private:
 	
 	std::unique_ptr<Type> ParseOptionalType(const picojson::value &root){
 		auto decl = std::make_unique<OptionalType>();
-		decl->sub = ParseTypeInfo(json::AssertReach<picojson::value>(root, {"type_info"}));
+		decl->sub = decl->Own(ParseTypeInfo(json::AssertReach<picojson::value>(root, {"type_info"})));
 		return decl;
 	}
 	
@@ -1019,7 +1097,7 @@ private:
 	std::unique_ptr<Type> ParseArrayType(const picojson::value &root){
 		auto decl = std::make_unique<ArrayType>();
 		
-		decl->elemType = ParseTypeInfo(json::AssertReach<picojson::value>(root, {"element_type"}));
+		decl->elemType = decl->Own(ParseTypeInfo(json::AssertReach<picojson::value>(root, {"element_type"})));
 		
 		ParseBounds(root, *decl);
 		return decl;
@@ -1028,7 +1106,7 @@ private:
 	std::unique_ptr<Type> ParseDynArrayType(const picojson::value &root){
 		auto decl = std::make_unique<DynArrayType>();
 		
-		decl->elemType = ParseTypeInfo(json::AssertReach<picojson::value>(root, {"element_type"}));
+		decl->elemType = decl->Own(ParseTypeInfo(json::AssertReach<picojson::value>(root, {"element_type"})));
 		
 		ParseBounds(root, *decl);
 		return decl;
@@ -1081,5 +1159,9 @@ private:
 	//std::unordered_map<std::string, std::string> m_Consts;
 	std::unordered_map<std::string, Type*> m_EventIDToType;
 };
+
+inline void ProtocolParser::TypeHolderSingle::TransferOwnedTo(TypeHolderMultiple *other){
+	if(m_Owned) other->Own(std::move(m_Owned));
+}
 
 #endif

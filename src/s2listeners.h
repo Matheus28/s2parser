@@ -15,9 +15,6 @@ struct Listener {
 	virtual void OnEvent(int64_t gameloop, int userid, std::string_view name) = 0;
 	virtual void OnEventEnd(int64_t gameloop, int userid, std::string_view name) = 0;
 	
-	virtual void OnEnterUserType(std::string_view name) = 0;
-	virtual void OnExitUserType(std::string_view name) = 0;
-	
 	virtual void OnEnterStruct() = 0;
 	virtual void OnStructField(std::string_view name) = 0;
 	virtual void OnExitStruct() = 0;
@@ -35,9 +32,6 @@ struct Listener {
 struct NullListener : Listener {
 	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {}
 	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {}
-	
-	void OnEnterUserType(std::string_view name) override {}
-	void OnExitUserType(std::string_view name) override {}
 	
 	void OnEnterStruct() override {}
 	void OnStructField(std::string_view name) override {}
@@ -66,14 +60,6 @@ struct BroadcastListener : Listener {
 	
 	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {
 		for(auto &v : m_Listeners) v->OnEventEnd(gameloop, userid, name);
-	}
-	
-	void OnEnterUserType(std::string_view name) override {
-		for(auto &v : m_Listeners) v->OnEnterUserType(name);
-	}
-	
-	void OnExitUserType(std::string_view name) override {
-		for(auto &v : m_Listeners) v->OnExitUserType(name);
 	}
 	
 	void OnEnterStruct() override {
@@ -403,14 +389,6 @@ struct ScopeFilterListener : Listener {
 	
 	void OnEventEnd(int64_t gameloop, int userid, std::string_view name) override {
 		if(m_bListening) m_Sub->OnEventEnd(gameloop, userid, name);
-	}
-	
-	void OnEnterUserType(std::string_view name) override {
-		if(m_bListening) m_Sub->OnEnterUserType(name);
-	}
-	
-	void OnExitUserType(std::string_view name) override {
-		if(m_bListening) m_Sub->OnExitUserType(name);
 	}
 	
 	void OnValueNull() override {
