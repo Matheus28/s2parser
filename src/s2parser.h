@@ -22,15 +22,15 @@ struct BitPackedBuffer {
 	}
 	
 	bool IsDone() const {
-		return m_iNextBits == 0 && m_iUsed >= m_Data.size();
+		return m_iNextBitsCount == 0 && m_iUsed >= m_Data.size();
 	}
 	
 	size_t UsedBits() const {
-		return m_iUsed * 8 - m_iNextBits;
+		return m_iUsed * 8 - m_iNextBitsCount;
 	}
 	
 	void ByteAlign(){
-		m_iNextBits = 0;
+		m_iNextBitsCount = 0;
 	}
 	
 	std::string_view ReadAlignedBytes(int n){
@@ -54,26 +54,34 @@ struct BitPackedBuffer {
 		int bitsRead = 0;
 		
 		while(bitsRead != bitsRequested){
-			if(m_iNextBits == 0){
+			if(m_iNextBitsCount == 0){
 				if(IsDone()){
 					return 0;
 				}
 				
-				m_iNext = (uint8_t) m_Data[m_iUsed];
+				// Consume a byte and put it in next bits
+				m_iNextBits = (uint8_t) m_Data[m_iUsed];
+				m_iNextBitsCount = 8;
 				++m_iUsed;
-				m_iNextBits = 8;
 			}
 			
-			auto copybits = std::min<int>(bitsRequested - bitsRead, m_iNextBits);
-			auto copy = (m_iNext & ((1 << copybits) - 1));
+			// How many bits to grab
+			auto copybits = std::min<int>(bitsRequested - bitsRead, m_iNextBitsCount);
+			auto mask = ((1 << copybits) - 1);
+			uint64_t copy = (m_iNextBits & mask);
+			
 			if(m_Endian == kBigEndian){
+				// Put these bits from left to right
 				result |= copy << (bitsRequested - bitsRead - copybits);
 			}else{
+				// Put these bits from right to left
 				result |= copy << bitsRead;
 			}
 			
-			m_iNext >>= copybits;
-			m_iNextBits -= copybits;
+			// Consume bits we copied
+			m_iNextBits >>= copybits;
+			m_iNextBitsCount -= copybits;
+			
 			bitsRead += copybits;
 		}
 		
@@ -163,8 +171,8 @@ struct BitPackedBuffer {
 	
 private:
 	size_t m_iUsed = 0;
+	uint8_t m_iNextBitsCount = 0;
 	uint8_t m_iNextBits = 0;
-	size_t m_iNext = 0;
 	std::string_view m_Data;
 	Endianness m_Endian;
 };
@@ -324,6 +332,7 @@ private:
 	struct Type {
 		virtual ~Type(){}
 		virtual void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) = 0;
+		virtual void Print(std::ostream &out) = 0;
 	};
 	
 	struct TypeWithBounds : Type {
@@ -332,11 +341,19 @@ private:
 		int64_t max;
 		bool maxInclusive = false;
 		uint8_t bitsNeededForBounds = 0;
+		
+		void PrintBounds(std::ostream &out){
+			out << " " << (minInclusive?'[':'(') << min << ", " << max << (maxInclusive?']':')') << " " << int(bitsNeededForBounds) << " bits";
+		}
 	};
 	
 	struct NullType : Type {
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
 			listener->OnValueNull();
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "null";
 		}
 	};
 	
@@ -349,6 +366,10 @@ private:
 				listener->OnValueInt(buf.ReadBitsSmall(1));
 			}
 		}
+		
+		void Print(std::ostream &out) override {
+			out << "bool";
+		}
 	};
 	
 	struct IntType : TypeWithBounds {
@@ -359,6 +380,11 @@ private:
 			}else{
 				listener->OnValueInt(int64_t((uint64_t) min + buf.ReadBitsSmall(bitsNeededForBounds)));
 			}
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "int";
+			PrintBounds(out);
 		}
 	};
 	
@@ -381,6 +407,11 @@ private:
 				listener->OnValueString(valueToName[value]);
 			}
 		}
+		
+		void Print(std::ostream &out) override {
+			out << "enum";
+			PrintBounds(out);
+		}
 	};
 	
 	// It's a bitmask. Always 64 bits int seems
@@ -393,10 +424,13 @@ private:
 				listener->OnValueInt(buf.ReadBitsSmall(64));
 			}
 		}
+		
+		void Print(std::ostream &out) override {
+			out << "inum";
+		}
 	};
 	
-	// Same as blob
-	struct StringType : TypeWithBounds {
+	struct BlobType : TypeWithBounds {
 		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
 			if(versioned){
 				buf.ExpectSkip(2);
@@ -406,6 +440,20 @@ private:
 				auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
 				listener->OnValueString(buf.ReadAlignedBytes(len));
 			}
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "blob";
+			PrintBounds(out);
+		}
+	};
+	
+	struct StringType : BlobType {
+		bool ascii = false;
+		
+		void Print(std::ostream &out) override {
+			out << "string";
+			PrintBounds(out);
 		}
 	};
 	
@@ -417,6 +465,12 @@ private:
 			listener->OnEnterUserType(fullname);
 			sub->Decode(versioned, buf, listener);
 			listener->OnExitUserType(fullname);
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "user<";
+			sub->Print(out);
+			out << ">";
 		}
 	};
 	
@@ -469,6 +523,20 @@ private:
 			if(fields[tag].type == nullptr) return nullptr;
 			return &fields[tag];
 		}
+		
+		void Print(std::ostream &out) override {
+			out << "struct<";
+			
+			bool first = true;
+			for(auto &v : fields){
+				if(first) first = false;
+				else out << ", ";
+				
+				v.type->Print(out);
+			}
+			
+			out << ">";
+		}
 	};
 	
 	// Just a 4 byte unaligned bytes
@@ -482,6 +550,10 @@ private:
 			auto str = buf.ReadAlignedBytes(4);
 			memcpy(&v, str.data(), 4);
 			listener->OnValueInt(v);
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "fourcc";
 		}
 	};
 	
@@ -503,10 +575,11 @@ private:
 				listener->OnValueBits(buf.ReadBits(min + buf.ReadBitsSmall(bitsNeededForBounds)));
 			}
 		}
-	};
-	
-	struct BlobType : StringType {
 		
+		void Print(std::ostream &out) override {
+			out << "bitarray";
+			PrintBounds(out);
+		}
 	};
 	
 	struct OptionalType : Type {
@@ -523,6 +596,12 @@ private:
 					sub->Decode(versioned, buf, listener);
 				}
 			}
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "optional<";
+			sub->Print(out);
+			out << ">";
 		}
 	};
 	
@@ -546,14 +625,27 @@ private:
 			}
 			listener->OnExitArray();
 		}
+		
+		void Print(std::ostream &out) override {
+			out << "array<";
+			elemType->Print(out);
+			out << ">";
+			PrintBounds(out);
+		}
 	};
 	
 	struct DynArrayType : ArrayType {
-		
+		void Print(std::ostream &out) override {
+			out << "dynarray<";
+			elemType->Print(out);
+			out << ">";
+			PrintBounds(out);
+		}
 	};
 	
 	struct ChoiceType : TypeWithBounds {
 		struct Choice {
+			int tag = -1;
 			std::string name;
 			std::unique_ptr<Type> sub;
 		};
@@ -575,8 +667,25 @@ private:
 				
 				if(id < choices.size()){
 					choices[id].sub->Decode(versioned, buf, listener);
+				}else{
+					std::cerr << "Bad choice " << id << " (only have " << choices.size() << ")" << std::endl;
 				}
 			}
+		}
+		
+		void Print(std::ostream &out) override {
+			out << "choice<";
+			
+			bool first = true;
+			for(auto &v : choices){
+				if(first) first = false;
+				else out << ", ";
+				
+				v.sub->Print(out);
+			}
+			
+			out << ">";
+			PrintBounds(out);
 		}
 	};
 	
@@ -660,8 +769,10 @@ private:
 			return ParseEnumType(root);
 		}else if(type == "InumType"){
 			return ParseInumType(root);
-		}else if(type == "StringType" || type == "AsciiStringType"){
-			return ParseStringType(root);
+		}else if(type == "StringType"){
+			return ParseStringType(root, false);
+		}else if(type == "AsciiStringType"){
+			return ParseStringType(root, true);
 		}else if(type == "IntType"){
 			return ParseIntType(root);
 		}else if(type == "UserType"){
@@ -735,19 +846,23 @@ private:
 		return decl;
 	}
 	
-	std::unique_ptr<Type> ParseStringType(const picojson::value &root){
+	std::unique_ptr<Type> ParseStringType(const picojson::value &root, bool ascii){
 		auto decl = std::make_unique<StringType>();
+		decl->ascii = ascii;
 		
 		ParseBounds(root, *decl);
+		if(!ascii){
+			// For some reason, non-ascii strings have their bounds 4 times higher than what it says here
+			// that means 2 bits
+			decl->bitsNeededForBounds += 2;
+		}
+		
 		return decl;
 	}
 	
 	std::unique_ptr<Type> ParseIntType(const picojson::value &root){
 		auto decl = std::make_unique<IntType>();
-		//FIXME: check inclusive bool
-		
 		ParseBounds(root, *decl);
-		
 		return decl;
 	}
 	
@@ -811,8 +926,6 @@ private:
 			}
 		}
 		
-		
-		
 		return decl;
 	}
 	
@@ -843,6 +956,19 @@ private:
 			maxValue = std::max(maxValue, valuef);
 		}
 		
+		// Put choices in the correct position according to their tag
+		for(size_t i = 0; i < decl->choices.size(); ++i){
+			if(decl->choices[i].tag != -1 && decl->choices[i].tag != i){
+				// Put us where our tag belongs
+				while(decl->choices[i].tag >= decl->choices.size()){
+					decl->choices.emplace_back();
+				}
+				
+				std::swap(decl->choices[i], decl->choices[decl->choices[i].tag]);
+				--i;
+			}
+		}
+		
 		// Make sure every slot is filled
 		for(auto &v : decl->choices){
 			assert(v.sub != nullptr);
@@ -859,16 +985,12 @@ private:
 	
 	std::unique_ptr<Type> ParseBitArrayType(const picojson::value &root){
 		auto decl = std::make_unique<BitArrayType>();
-		//FIXME: check inclusive bool
-		
 		ParseBounds(root, *decl);
 		return decl;
 	}
 	
 	std::unique_ptr<Type> ParseBlobType(const picojson::value &root){
 		auto decl = std::make_unique<BlobType>();
-		//FIXME: check inclusive bool
-		
 		ParseBounds(root, *decl);
 		return decl;
 	}
@@ -885,7 +1007,6 @@ private:
 		
 		decl->elemType = ParseTypeInfo(json::AssertReach<picojson::value>(root, {"element_type"}));
 		
-		//FIXME: check inclusive bool
 		ParseBounds(root, *decl);
 		return decl;
 	}
@@ -895,7 +1016,6 @@ private:
 		
 		decl->elemType = ParseTypeInfo(json::AssertReach<picojson::value>(root, {"element_type"}));
 		
-		//FIXME: check inclusive bool
 		ParseBounds(root, *decl);
 		return decl;
 	}
@@ -905,12 +1025,15 @@ private:
 		const auto &max = json::AssertReach<std::string>(root, {"bounds", "max", "evalue"});
 		
 		decl.minInclusive = json::AssertReach<bool>(root, {"bounds", "min", "inclusive"});
+		decl.maxInclusive = json::AssertReach<bool>(root, {"bounds", "max", "inclusive"});
+		
 		try {
 			decl.min = std::stoll(min);
 		}catch(std::out_of_range){
 			decl.min = INT64_MIN;
+			decl.minInclusive = true;
 		}
-		decl.maxInclusive = json::AssertReach<bool>(root, {"bounds", "max", "inclusive"});
+		
 		try {
 			decl.max = std::stoll(max);
 		}catch(std::out_of_range){
@@ -929,17 +1052,19 @@ private:
 	}
 	
 	void LoadConstDecl(const picojson::value &root, bool local){
+		/*
 		auto name = json::AssertReach<std::string>(root, {"fullname"});
 		if(name.empty()) return;
 		
 		auto value = json::Reach<std::string>(root, {"value", "value"});
 		static std::string unknown = "???";
 		m_Consts.insert_or_assign(name, value.value_or(unknown));
+		*/
 	}
 	
 	picojson::value m_Root;
 	std::unordered_map<std::string, std::unique_ptr<Type>> m_Types;
-	std::unordered_map<std::string, std::string> m_Consts;
+	//std::unordered_map<std::string, std::string> m_Consts;
 	std::unordered_map<std::string, Type*> m_EventIDToType;
 };
 

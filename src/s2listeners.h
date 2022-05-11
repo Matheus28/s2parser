@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <vector>
 #include <memory>
+#include <iostream>
 
 #include "picojson.h"
 
@@ -229,7 +230,7 @@ struct BasicStructListener : NullListener {
 		std::string_view stringValue;
 	};
 	
-	BasicStructListener(std::string_view eventName, std::string_view jsonName, const std::initializer_list<Field> &fields_) : m_EventName(eventName), m_JSONName(jsonName), fields(fields_){
+	BasicStructListener(std::ostream &out, std::string_view eventName, std::string_view jsonName, const std::initializer_list<Field> &fields_) : m_Out(out), m_EventName(eventName), m_JSONName(jsonName), fields(fields_){
 		size_t index = 0;
 		for(auto &v : fields){
 			m_FieldByGameName[v.gameFieldName] = &v;
@@ -271,7 +272,7 @@ struct BasicStructListener : NullListener {
 			}
 		}
 		
-		std::cout << picojson::value(std::move(root)).serialize(false) << "\n";
+		m_Out << picojson::value(std::move(root)).serialize(false) << "\n";
 	}
 	
 	virtual void OnStructField(std::string_view name){
@@ -317,6 +318,8 @@ struct BasicStructListener : NullListener {
 	}
 	
 private:
+	std::ostream &m_Out;
+	
 	std::string_view m_EventName;
 	std::string m_JSONName;
 	std::vector<Field> fields;

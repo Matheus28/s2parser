@@ -6,10 +6,11 @@ int64_t WindowsToUnixTimestamp(int64_t v){
 	return (v - 116444735995904000) / 10000000;
 }
 
-BroadcastListener GetTrackerListener(){
+BroadcastListener GetTrackerListener(std::ostream &out){
 	BroadcastListener r;
 	
 	r.AddListener(std::make_unique<BasicStructListener>(BasicStructListener(
+		out,
 		"NNet.Replay.Tracker.EEventId.e_unitBorn",
 		"unitBorn",
 		{
@@ -32,6 +33,7 @@ BroadcastListener GetTrackerListener(){
 	)));
 	
 	r.AddListener(std::make_unique<BasicStructListener>(BasicStructListener(
+		out,
 		"NNet.Replay.Tracker.EEventId.e_upgrade",
 		"upgrade",
 		{
@@ -56,10 +58,11 @@ BroadcastListener GetTrackerListener(){
 	return r;
 }
 
-BroadcastListener GetGameListener(){
+BroadcastListener GetGameListener(std::ostream &out){
 	BroadcastListener r;
 	
 	r.AddListener(std::make_unique<BasicStructListener>(BasicStructListener(
+		out,
 		"NNet.Game.EEventId.e_gameUserLeave",
 		"playerLeft",
 		{
@@ -70,10 +73,11 @@ BroadcastListener GetGameListener(){
 	return r;
 }
 
-BroadcastListener GetDetailsListener(){
+BroadcastListener GetDetailsListener(std::ostream &out){
 	BroadcastListener r;
 	
 	r.AddListener(std::make_unique<BasicStructListener>(BasicStructListener(
+		out,
 		"NNet.Game.SDetails",
 		"details",
 		{
@@ -163,13 +167,15 @@ std::string PatchUpCacheHandle(std::string &str){
 }
 
 bool ProcessReplay(const char *filename, std::ostream &out){
+	const bool pretty = false;
+	
 	SC2ReplayListeners listeners;
 	
-	//auto tracker = GetTrackerListener();
-	//listeners.tracker = &tracker;
+	auto tracker = GetTrackerListener(out);
+	listeners.tracker = &tracker;
 	
-	//auto game = GetGameListener();
-	//listeners.game = &game;
+	auto game = GetGameListener(out);
+	listeners.game = &game;
 	
 	auto detailsJSON = JSONBuilderListener(true);
 	listeners.details = &detailsJSON;
@@ -203,15 +209,15 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 		}
 	}
 	
-	out << detailsJSON.GetJSON().back().serialize(true) << "\n";
-	out << headerJSON.GetJSON().back().serialize(true) << "\n";
+	out << "{\"type\":\"details\",\"data\":" << detailsJSON.GetJSON().back().serialize(pretty) << "}\n";
+	out << "{\"type\":\"header\",\"data\":" << headerJSON.GetJSON().back().serialize(pretty) << "}\n";
 	
 	{
 		picojson::object extraData;
 		
 		extraData["region"] = region.empty() ? picojson::value() : picojson::value(region);
 		
-		out << "{\"type\":\"extra\",\"data\":" << picojson::value(std::move(extraData)).serialize() << "}\n";
+		out << "{\"type\":\"extra\",\"data\":" << picojson::value(std::move(extraData)).serialize(pretty) << "}\n";
 	}
 	
 	return true;
