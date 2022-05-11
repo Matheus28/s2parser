@@ -332,6 +332,7 @@ private:
 	struct Type {
 		virtual ~Type(){}
 		virtual void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) = 0;
+		virtual void ResolveUserTypes(ProtocolParser *p){}
 		virtual void Print(std::ostream &out) = 0;
 	};
 	
@@ -478,6 +479,18 @@ private:
 			listener->OnExitUserType(fullname);
 		}
 		
+		void ResolveUserTypes(ProtocolParser *p) override {
+			auto it = p->m_Types.find(std::string(fullname));
+			if(it == p->m_Types.end()){
+				std::cerr << "Unresolved UserType: " << fullname;
+				abort();
+			}
+			
+			sub = it->second.get();
+			
+			sub->ResolveUserTypes(p);
+		}
+		
 		void Print(std::ostream &out) override {
 			out << "user<";
 			sub->Print(out);
@@ -533,6 +546,16 @@ private:
 			if(fields[tag].tag != tag) return nullptr;
 			if(fields[tag].type == nullptr) return nullptr;
 			return &fields[tag];
+		}
+		
+		void ResolveUserTypes(ProtocolParser *p) override {
+			for(auto &v : parents){
+				v->ResolveUserTypes(p);
+			}
+			
+			for(auto &v : fields){
+				v.type->ResolveUserTypes(p);
+			}
 		}
 		
 		void Print(std::ostream &out) override {
@@ -609,6 +632,10 @@ private:
 			}
 		}
 		
+		void ResolveUserTypes(ProtocolParser *p) override {
+			sub->ResolveUserTypes(p);
+		}
+		
 		void Print(std::ostream &out) override {
 			out << "optional<";
 			sub->Print(out);
@@ -635,6 +662,10 @@ private:
 				}
 			}
 			listener->OnExitArray();
+		}
+		
+		void ResolveUserTypes(ProtocolParser *p) override {
+			elemType->ResolveUserTypes(p);
 		}
 		
 		void Print(std::ostream &out) override {
@@ -684,6 +715,12 @@ private:
 			}
 		}
 		
+		void ResolveUserTypes(ProtocolParser *p) override {
+			for(auto &v : choices){
+				v.sub->ResolveUserTypes(p);
+			}
+		}
+		
 		void Print(std::ostream &out) override {
 			out << "choice<";
 			
@@ -710,41 +747,7 @@ private:
 	
 	void ResolveUserTypes(){
 		for(auto &[name, v] : m_Types){
-			ResolveUserTypes(v.get());
-		}
-	}
-	
-	void ResolveUserTypes(Type *v){
-		assert(v != nullptr);
-		
-		//TODO Refactor this into a virtual function inside the struct
-		
-		if(auto uv = dynamic_cast<UserType*>(v)){
-			auto it = m_Types.find(std::string(uv->fullname));
-			if(it == m_Types.end()){
-				std::cerr << "Unresolved UserType: " << uv->fullname;
-				abort();
-			}
-			
-			uv->sub = it->second.get();
-		}else if(auto uv = dynamic_cast<StructType*>(v)){
-			for(auto &v : uv->parents){
-				ResolveUserTypes(v.get());
-			}
-			
-			for(auto &v : uv->fields){
-				if(v.type) ResolveUserTypes(v.type.get());
-			}
-		}else if(auto uv = dynamic_cast<OptionalType*>(v)){
-			ResolveUserTypes(uv->sub.get());
-		}else if(auto uv = dynamic_cast<ArrayType*>(v)){
-			ResolveUserTypes(uv->elemType.get());
-		}else if(auto uv = dynamic_cast<DynArrayType*>(v)){
-			ResolveUserTypes(uv->elemType.get());
-		}else if(auto uv = dynamic_cast<ChoiceType*>(v)){
-			for(auto &v : uv->choices){
-				ResolveUserTypes(v.sub.get());
-			}
+			v->ResolveUserTypes(this);
 		}
 	}
 	
