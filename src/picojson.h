@@ -576,10 +576,20 @@ template <typename Iter> void serialize_str(const std::string &s, Iter oi) {
           if(codepoint >= 0xd800 && codepoint <= 0xdfff) break; // break switch. Surrogate... shouldn't happen but in that case just skip it
           
           if(codepoint != 0){
-            char buf[7];
-            SNPRINTF(buf, sizeof(buf), "\\u%04" PRIx32, codepoint & 0xffff);
-            copy(buf, buf + 6, oi);
-            break; // switch, so we don't fall to the code below
+            if(codepoint <= 0xffff){
+              char buf[7];
+              SNPRINTF(buf, sizeof(buf), "\\u%04" PRIx32, codepoint & 0xffff);
+              copy(buf, buf + 6, oi);
+              break; // switch, so we don't fall to the code below
+            }else if(codepoint <= 0x10FFFF){
+              // Split into two utf16 words
+              uint32_t u = codepoint - 0x10000;
+              uint32_t w1 = 0xd800 | ((u >> 10) & 0x3FF);
+              uint32_t w2 = 0xdc00 | (u & 0x3FF);
+              char buf[13];
+              SNPRINTF(buf, sizeof(buf), "\\u%04" PRIx32 "\\u%04" PRIx32, w1 & 0xffff, w2 & 0xffff);
+              copy(buf, buf + 12, oi);
+            }
           }
       }
       
