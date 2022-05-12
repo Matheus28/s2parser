@@ -26,7 +26,7 @@ struct Listener {
 	virtual void OnValueInt(int64_t v) = 0;
 	virtual void OnValueString(std::string_view) = 0;
 	virtual void OnValueBlob(std::string_view) = 0;
-	virtual void OnValueBits(std::vector<uint8_t>) = 0;
+	virtual void OnValueBits(std::string_view) = 0;
 };
 
 struct NullListener : Listener {
@@ -44,7 +44,7 @@ struct NullListener : Listener {
 	void OnValueInt(int64_t v) override {}
 	void OnValueString(std::string_view) override {}
 	void OnValueBlob(std::string_view) override {}
-	void OnValueBits(std::vector<uint8_t>) override {}
+	void OnValueBits(std::string_view) override {}
 };
 
 struct BroadcastListener : Listener {
@@ -98,7 +98,7 @@ struct BroadcastListener : Listener {
 		for(auto &v : m_Listeners) v->OnValueBlob(value);
 	}
 	
-	void OnValueBits(std::vector<uint8_t> value) override {
+	void OnValueBits(std::string_view value) override {
 		for(auto &v : m_Listeners) v->OnValueBits(value);
 	}
 	
@@ -173,7 +173,7 @@ struct JSONBuilderListener : NullListener {
 		OnValue(picojson::value(std::move(arr)));
 	}
 	
-	void OnValueBits(std::vector<uint8_t> v) override {
+	void OnValueBits(std::string_view v) override {
 		OnValue(picojson::value(std::string((char*) v.data(), v.size())));
 	}
 	
@@ -403,7 +403,7 @@ struct ScopeFilterListener : Listener {
 		if(m_bListening) m_Sub->OnValueString(value);
 	}
 	
-	void OnValueBits(std::vector<uint8_t> value) override {
+	void OnValueBits(std::string_view value) override {
 		if(m_bListening) m_Sub->OnValueBits(value);
 	}
 	

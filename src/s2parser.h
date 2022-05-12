@@ -95,17 +95,17 @@ struct BitPackedBuffer {
 		return result;
 	}
 	
-	std::vector<uint8_t> ReadBits(int bitsRequested){
-		std::vector<uint8_t> vec;
+	std::string ReadBits(int bitsRequested){
+		std::string vec;
 		vec.resize((bitsRequested+7) / 8);
 		size_t i = 0;
 		while(bitsRequested >= 8){
-			vec[i++] = ReadBitsSmall(8);
+			vec[i++] = (uint8_t) ReadBitsSmall(8);
 			bitsRequested -= 8;
 		}
 		
 		if(bitsRequested > 0){
-			vec[i++] = ReadBitsSmall(bitsRequested);
+			vec[i++] = (uint8_t) ReadBitsSmall(bitsRequested);
 		}
 		
 		return vec;
@@ -204,9 +204,9 @@ struct ProtocolParser {
 	}
 	
 	// Decodes a specific structure
+	template<bool Versioned>
 	bool DecodeInstance(
 		std::string_view data,
-		bool versioned,
 		const std::string &typeName,
 		Listener *listener
 	){
@@ -222,18 +222,17 @@ struct ProtocolParser {
 		auto buf = BitPackedBuffer(data);
 		
 		listener->OnEvent(0, -1, typeName);
-		type->Decode(versioned, buf, listener);
+		type->Decode<Versioned>(buf, listener);
 		listener->OnEventEnd(0, -1, typeName);
 		
 		return true;
 	}
 	
 	// Decodes events prefixed with a gameloop and possibly userid
+	template<bool Versioned, bool DecodeUserID>
 	bool DecodeEventStream(
 		std::string_view data,
-		bool versioned,
 		const std::string &eventIDType,
-		bool decodeUserID,
 		Listener *listener
 	){
 		auto eventIDEnumIt = m_Types.find(eventIDType);
@@ -303,16 +302,16 @@ struct ProtocolParser {
 		
 		int64_t gameloop = 0;
 		while(!buf.IsDone()){
-			varuint32Type->Decode(versioned, buf, &tmpListener);
+			varuint32Type->Decode<Versioned>(buf, &tmpListener);
 			gameloop += decodedInt;
 			
 			int userid = -1;
-			if(decodeUserID){
-				useridType->Decode(versioned, buf, &tmpListener);
+			if constexpr(DecodeUserID){
+				useridType->Decode<Versioned>(buf, &tmpListener);
 				userid = decodedInt;
 			}
 			
-			eventIDEnum->Decode(versioned, buf, &tmpListener);
+			eventIDEnum->Decode<Versioned>(buf, &tmpListener);
 			auto eventID = decodedInt;
 			
 			if(eventID < 0 || eventID >= eventIDToType.size() || eventIDToType[eventID].second == nullptr){
@@ -321,7 +320,7 @@ struct ProtocolParser {
 			}
 			
 			listener->OnEvent(gameloop, userid, eventIDToType[eventID].first);
-			eventIDToType[eventID].second->Decode(versioned, buf, listener);
+			eventIDToType[eventID].second->Decode<Versioned>( buf, listener);
 			listener->OnEventEnd(gameloop, userid, eventIDToType[eventID].first);
 			
 			// Next event is byte aligned
@@ -335,10 +334,20 @@ private:
 	struct UserType;
 	struct Type {
 		virtual ~Type(){}
-		virtual void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) = 0;
+		virtual void DecodeImplied(BitPackedBuffer &buf, Listener *listener) = 0;
+		virtual void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) = 0;
 		virtual void ResolveUserTypes(ProtocolParser *p){}
 		virtual void Print(std::ostream &out) = 0;
 		virtual UserType* ToUserType(){ return nullptr; }
+		
+		template<bool Versioned>
+		void Decode(BitPackedBuffer &buf, Listener *listener){
+			if constexpr(Versioned){
+				return DecodeVersioned(buf, listener);
+			}else{
+				return DecodeImplied(buf, listener);
+			}
+		}
 	};
 	
 	struct TypeHolderMultiple;
@@ -403,7 +412,11 @@ private:
 	};
 	
 	struct NullType : Type {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnValueNull();
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
 			listener->OnValueNull();
 		}
 		
@@ -413,13 +426,13 @@ private:
 	};
 	
 	struct BoolType : Type {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(6);
-				listener->OnValueInt(buf.ReadBitsSmall(8) != 0);
-			}else{
-				listener->OnValueInt(buf.ReadBitsSmall(1));
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnValueInt(buf.ReadBitsSmall(1));
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(6);
+			listener->OnValueInt(buf.ReadBitsSmall(8) != 0);
 		}
 		
 		void Print(std::ostream &out) override {
@@ -428,13 +441,13 @@ private:
 	};
 	
 	struct IntType : TypeWithBounds {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(9);
-				listener->OnValueInt(buf.Vint());
-			}else{
-				listener->OnValueInt(int64_t((uint64_t) min + buf.ReadBitsSmall(bitsNeededForBounds)));
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnValueInt(int64_t((uint64_t) min + buf.ReadBitsSmall(bitsNeededForBounds)));
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(9);
+			listener->OnValueInt(buf.Vint());
 		}
 		
 		void Print(std::ostream &out) override {
@@ -447,15 +460,19 @@ private:
 	struct EnumType : TypeWithBounds {
 		std::unordered_map<std::string_view, std::string_view> fullnameToValue;
 		std::vector<std::string_view> valueToName;
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+		
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			int64_t value = min + buf.ReadBitsSmall(bitsNeededForBounds);
 			
-			int64_t value;
-			if(versioned){
-				buf.ExpectSkip(9);
-				value = buf.Vint();
-			}else{
-				value = min + buf.ReadBitsSmall(bitsNeededForBounds);
+			listener->OnValueInt(value);
+			if(value >= 0 && value <= valueToName.size()){
+				listener->OnValueString(valueToName[value]);
 			}
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(9);
+			int64_t value = buf.Vint();
 			
 			listener->OnValueInt(value);
 			if(value >= 0 && value <= valueToName.size()){
@@ -471,13 +488,13 @@ private:
 	
 	// It's a bitmask. Always 64 bits int seems
 	struct InumType : Type {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(9);
-				listener->OnValueInt(buf.Vint());
-			}else{
-				listener->OnValueInt(buf.ReadBitsSmall(64));
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnValueInt(buf.ReadBitsSmall(64));
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(9);
+			listener->OnValueInt(buf.Vint());
 		}
 		
 		void Print(std::ostream &out) override {
@@ -486,15 +503,15 @@ private:
 	};
 	
 	struct BlobType : TypeWithBounds {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(2);
-				auto len = buf.Vint();
-				listener->OnValueBlob(buf.ReadAlignedBytes(len));
-			}else{
-				auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
-				listener->OnValueBlob(buf.ReadAlignedBytes(len));
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
+			listener->OnValueBlob(buf.ReadAlignedBytes(len));
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(2);
+			auto len = buf.Vint();
+			listener->OnValueBlob(buf.ReadAlignedBytes(len));
 		}
 		
 		void Print(std::ostream &out) override {
@@ -506,15 +523,15 @@ private:
 	struct StringType : TypeWithBounds {
 		bool ascii = false;
 		
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(2);
-				auto len = buf.Vint();
-				listener->OnValueString(buf.ReadAlignedBytes(len));
-			}else{
-				auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
-				listener->OnValueString(buf.ReadAlignedBytes(len));
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
+			listener->OnValueString(buf.ReadAlignedBytes(len));
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(2);
+			auto len = buf.Vint();
+			listener->OnValueString(buf.ReadAlignedBytes(len));
 		}
 		
 		void Print(std::ostream &out) override {
@@ -529,9 +546,14 @@ private:
 		
 		UserType* ToUserType() override { return this; }
 		
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
 			std::cerr << "Found a non-resolved user type, this is inefficient. Fix me\n";
-			sub->Decode(versioned, buf, listener);
+			sub->DecodeImplied(buf, listener);
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			std::cerr << "Found a non-resolved user type, this is inefficient. Fix me\n";
+			sub->DecodeVersioned(buf, listener);
 		}
 		
 		void ResolveUserTypes(ProtocolParser *p) override {
@@ -568,33 +590,35 @@ private:
 		std::vector<Type*> parents;
 		std::vector<Field> fields;
 		
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
 			listener->OnEnterStruct();
 			
-			if(versioned){
-				buf.ExpectSkip(5);
+			// Parents always come first it seems
+			for(auto &v : parents){
+				v->DecodeImplied(buf, listener);
+			}
+			
+			for(auto &v : fields){
+				listener->OnStructField(v.name);
+				v.type->DecodeImplied(buf, listener);
+			}
+			
+			listener->OnExitStruct();
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnEnterStruct();
+			
+			buf.ExpectSkip(5);
+			auto len = buf.Vint();
+			for(size_t i = 0; i < len; ++i){
+				auto tag = buf.Vint();
 				
-				auto len = buf.Vint();
-				for(size_t i = 0; i < len; ++i){
-					auto tag = buf.Vint();
-					
-					if(auto field = GetFieldByTag(tag)){
-						listener->OnStructField(field->name);
-						field->type->Decode(versioned, buf, listener);
-					}else{
-						buf.SkipInstance();
-					}
-					
-				}
-			}else{
-				// Parents always come first it seems
-				for(auto &v : parents){
-					v->Decode(versioned, buf, listener);
-				}
-				
-				for(auto &v : fields){
-					listener->OnStructField(v.name);
-					v.type->Decode(versioned, buf, listener);
+				if(auto field = GetFieldByTag(tag)){
+					listener->OnStructField(field->name);
+					field->type->DecodeVersioned(buf, listener);
+				}else{
+					buf.SkipInstance();
 				}
 			}
 			
@@ -645,10 +669,15 @@ private:
 	
 	// Just a 4 byte unaligned bytes
 	struct FourCCType : Type {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(7);
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			uint32_t v;
+			auto str = buf.ReadAlignedBytes(4);
+			memcpy(&v, str.data(), 4);
+			listener->OnValueInt(v);
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(7);
 			
 			uint32_t v;
 			auto str = buf.ReadAlignedBytes(4);
@@ -662,22 +691,14 @@ private:
 	};
 	
 	struct BitArrayType : TypeWithBounds {
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(1);
-				auto len = buf.Vint();
-				auto tmp = buf.ReadAlignedBytes((len + 7) / 8);
-				
-				int64_t v = 0;
-				if(tmp.size() <= sizeof(int64_t)){
-					memcpy(&v, tmp.data(), tmp.size());
-					listener->OnValueInt(v);
-				}else{
-					listener->OnValueInt(0);
-				}
-			}else{
-				listener->OnValueBits(buf.ReadBits(min + buf.ReadBitsSmall(bitsNeededForBounds)));
-			}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnValueBits(buf.ReadBits(min + buf.ReadBitsSmall(bitsNeededForBounds)));
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(1);
+			auto len = buf.Vint();
+			listener->OnValueBits(buf.ReadAlignedBytes((len + 7) / 8));
 		}
 		
 		void Print(std::ostream &out) override {
@@ -689,16 +710,20 @@ private:
 	struct OptionalType : Type, TypeHolderSingle {
 		Type *sub;
 		
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(4);
-				if(buf.ReadBitsSmall(8) != 0){
-					sub->Decode(versioned, buf, listener);
-				}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			if(buf.ReadBitsSmall(1) != 0){
+				sub->DecodeImplied(buf, listener);
 			}else{
-				if(buf.ReadBitsSmall(1) != 0){
-					sub->Decode(versioned, buf, listener);
-				}
+				listener->OnValueNull();
+			}
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(4);
+			if(buf.ReadBitsSmall(8) != 0){
+				sub->DecodeVersioned(buf, listener);
+			}else{
+				listener->OnValueNull();
 			}
 		}
 		
@@ -721,20 +746,22 @@ private:
 	struct ArrayType : TypeWithBounds, TypeHolderSingle {
 		Type *elemType;
 		
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
 			listener->OnEnterArray();
-			if(versioned){
-				buf.ExpectSkip(0);
-				auto len = buf.Vint();
-				for(size_t i = 0; i < len; ++i){
-					elemType->Decode(versioned, buf, listener);
-				}
-			}else{
-				auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
-				
-				for(size_t i = 0; i < len; ++i){
-					elemType->Decode(versioned, buf, listener);
-				}
+			auto len = min + buf.ReadBitsSmall(bitsNeededForBounds);
+			
+			for(size_t i = 0; i < len; ++i){
+				elemType->DecodeImplied(buf, listener);
+			}
+			listener->OnExitArray();
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			listener->OnEnterArray();
+			buf.ExpectSkip(0);
+			auto len = buf.Vint();
+			for(size_t i = 0; i < len; ++i){
+				elemType->DecodeVersioned(buf, listener);
 			}
 			listener->OnExitArray();
 		}
@@ -774,24 +801,24 @@ private:
 		
 		std::vector<Choice> choices;
 		
-		void Decode(bool versioned, BitPackedBuffer &buf, Listener *listener) override {
-			if(versioned){
-				buf.ExpectSkip(3);
-				auto id = buf.Vint();
-				
-				if(id < choices.size()){
-					choices[id].sub->Decode(versioned, buf, listener);
-				}else{
-					buf.SkipInstance();
-				}
+		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
+			auto id = min + buf.ReadBitsSmall(bitsNeededForBounds);
+			
+			if(id < choices.size()){
+				choices[id].sub->DecodeImplied(buf, listener);
 			}else{
-				auto id = min + buf.ReadBitsSmall(bitsNeededForBounds);
-				
-				if(id < choices.size()){
-					choices[id].sub->Decode(versioned, buf, listener);
-				}else{
-					std::cerr << "Bad choice " << id << " (only have " << choices.size() << ")" << std::endl;
-				}
+				std::cerr << "Bad choice " << id << " (only have " << choices.size() << ")" << std::endl;
+			}
+		}
+		
+		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
+			buf.ExpectSkip(3);
+			auto id = buf.Vint();
+			
+			if(id < choices.size()){
+				choices[id].sub->DecodeVersioned(buf, listener);
+			}else{
+				buf.SkipInstance();
 			}
 		}
 		

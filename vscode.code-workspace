@@ -68,7 +68,32 @@
 			"xlocmes": "cpp",
 			"xlocmon": "cpp",
 			"xloctime": "cpp",
-			"*.rh": "cpp"
+			"*.rh": "cpp",
+			"any": "cpp",
+			"array": "cpp",
+			"atomic": "cpp",
+			"bitset": "cpp",
+			"cctype": "cpp",
+			"charconv": "cpp",
+			"clocale": "cpp",
+			"condition_variable": "cpp",
+			"csignal": "cpp",
+			"cstdarg": "cpp",
+			"deque": "cpp",
+			"forward_list": "cpp",
+			"future": "cpp",
+			"mutex": "cpp",
+			"numeric": "cpp",
+			"queue": "cpp",
+			"random": "cpp",
+			"regex": "cpp",
+			"set": "cpp",
+			"shared_mutex": "cpp",
+			"stack": "cpp",
+			"strstream": "cpp",
+			"xthread": "cpp",
+			"thread": "cpp",
+			"typeindex": "cpp"
 		}
 	}
 }

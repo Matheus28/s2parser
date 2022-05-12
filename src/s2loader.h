@@ -169,7 +169,7 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 		};
 		
 		ProtocolListener l{baseBuild};
-		if(!GetLatestProtocolParser().DecodeInstance(userData, true, "NNet.Replay.SHeader", &l)){
+		if(!GetLatestProtocolParser().DecodeInstance<true>(userData, "NNet.Replay.SHeader", &l)){
 			std::cerr << "DecodeInstance for replay header failed" << std::endl;
 			return false;
 		}
@@ -203,18 +203,16 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 	}
 	
 	if(listeners.header){
-		if(!replayProtocol->DecodeInstance(userData, true, "NNet.Replay.SHeader", listeners.header)){
+		if(!replayProtocol->DecodeInstance<true>(userData, "NNet.Replay.SHeader", listeners.header)){
 			return false;
 		}
 	}
 	
 	if(listeners.tracker){
 		if(auto str = GetMPQFile(mpq.get(), "replay.tracker.events")){
-			if(!replayProtocol->DecodeEventStream(
+			if(!replayProtocol->DecodeEventStream<true, false>(
 				*str,
-				true,
 				"NNet.Replay.Tracker.EEventId",
-				false,
 				listeners.tracker
 			)){
 				return false;
@@ -224,11 +222,9 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 	
 	if(listeners.game){
 		if(auto str = GetMPQFile(mpq.get(), "replay.game.events")){
-			if(!replayProtocol->DecodeEventStream(
+			if(!replayProtocol->DecodeEventStream<false, true>(
 				*str,
-				false,
 				"NNet.Game.EEventId",
-				true,
 				listeners.game
 			)){
 				return false;
@@ -238,9 +234,8 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 	
 	if(listeners.details){
 		if(auto str = GetMPQFile(mpq.get(), "replay.details")){
-			if(!replayProtocol->DecodeInstance(
+			if(!replayProtocol->DecodeInstance<true>(
 				*str,
-				true,
 				"NNet.Game.SDetails",
 				listeners.details
 			)){
