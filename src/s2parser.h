@@ -50,6 +50,13 @@ struct BitPackedBuffer {
 	uint64_t ReadBitsSmall(int bitsRequested){
 		assert(bitsRequested <= 64);
 		
+		if(IsDone()) return 0;
+		
+		// Tiny optimization for the common case
+		if(m_iNextBitsCount == 0 && bitsRequested == 8){
+			return (uint8_t) m_Data[m_iUsed++];
+		}
+		
 		uint64_t result = 0;
 		int bitsRead = 0;
 		
