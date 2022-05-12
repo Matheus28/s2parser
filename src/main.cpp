@@ -269,6 +269,9 @@ int main(int argc, const char *argv[]){
 	if(strcmp(filename, "--http") == 0){
 		httplib::Server server;
 		
+		// It'll delete the object for us
+		server.new_task_queue = [](){ return new httplib::ThreadPool(3); };
+		
 		server.set_payload_max_length(5 * 1024 * 1024); // 5 MiB
 		
 		server.Get("/", [](const httplib::Request &, httplib::Response &res){
