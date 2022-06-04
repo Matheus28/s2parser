@@ -112,6 +112,17 @@ struct SC2ReplayListeners {
 	Listener *tracker = nullptr;
 	Listener *game = nullptr;
 	Listener *details = nullptr;
+	
+	Listener *lastGameEventWorkaround = nullptr;
+};
+
+
+struct WorkaroundListener : public NullListener {
+	int userid = -1;
+	
+	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {
+		this->userid = userid;
+	}
 };
 
 inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
@@ -220,10 +231,11 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 		}
 	}
 	
+	std::optional<std::string> gameEventsFile;
 	if(listeners.game){
-		if(auto str = GetMPQFile(mpq.get(), "replay.game.events")){
+		if(gameEventsFile = GetMPQFile(mpq.get(), "replay.game.events")){
 			if(!replayProtocol->DecodeEventStream<false, true>(
-				*str,
+				*gameEventsFile,
 				"NNet.Game.EEventId",
 				listeners.game
 			)){
@@ -238,6 +250,21 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 				*str,
 				"NNet.Game.SDetails",
 				listeners.details
+			)){
+				return false;
+			}
+		}
+	}
+	
+	// So we assume that the last game event is a leave event, which takes 3 bytes... and we read that and hope for the best
+	if(listeners.lastGameEventWorkaround){
+		if(!gameEventsFile) gameEventsFile = GetMPQFile(mpq.get(), "replay.game.events");
+		
+		if(gameEventsFile){
+			if(!replayProtocol->DecodeEventStream<false, true>(
+				gameEventsFile->substr(gameEventsFile->size() - 3),
+				"NNet.Game.EEventId",
+				listeners.lastGameEventWorkaround
 			)){
 				return false;
 			}

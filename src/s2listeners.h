@@ -111,9 +111,26 @@ struct JSONBuilderListener : NullListener {
 		m_Stack.emplace_back(picojson::array());
 	}
 	
+	void OnEvent(int64_t gameloop, int userid, std::string_view name) override {
+		m_PendingEventUserID = userid;
+		m_PendingEventGameLoop = gameloop;
+	}
+	
 	void OnEnterStruct() override {
 		m_Keys.push_back(m_LastKey);
 		m_Stack.emplace_back(picojson::object());
+		
+		auto &obj = m_Stack.back().get<picojson::object>();
+		
+		if(m_PendingEventUserID){
+			obj["_userid"] = picojson::value((int64_t) *m_PendingEventUserID);
+			m_PendingEventUserID.reset();
+		}
+		
+		if(m_PendingEventGameLoop){
+			obj["_gameloop"] = picojson::value(*m_PendingEventGameLoop);
+			m_PendingEventGameLoop.reset();
+		}
 	}
 	
 	void OnStructField(std::string_view name) override {
@@ -203,6 +220,8 @@ private:
 	std::string_view m_LastKey = "";
 	std::vector<std::string_view> m_Keys;
 	std::vector<picojson::value> m_Stack;
+	std::optional<int> m_PendingEventUserID;
+	std::optional<int64_t> m_PendingEventGameLoop;
 };
 
 struct BasicStructListener : NullListener {

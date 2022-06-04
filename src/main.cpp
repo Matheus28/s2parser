@@ -185,6 +185,9 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 	auto headerJSON = JSONBuilderListener(true);
 	listeners.header = &headerJSON;
 	
+	WorkaroundListener workaroundListener;
+	listeners.lastGameEventWorkaround = &workaroundListener;
+	
 	if(!LoadSC2Replay(filename, listeners)){
 		return false;
 	}
@@ -229,6 +232,7 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 		picojson::object extraData;
 		
 		extraData["region"] = region.empty() ? picojson::value() : picojson::value(region);
+		extraData["likelyRecorder"] = workaroundListener.userid >= 0 ? picojson::value((int64_t) workaroundListener.userid) : picojson::value();
 		
 		out << "{\"type\":\"extra\",\"data\":" << picojson::value(std::move(extraData)).serialize(pretty) << "}\n";
 	}
