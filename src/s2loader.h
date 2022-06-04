@@ -90,7 +90,7 @@ inline std::optional<ProtocolParser> LoadProtocol(uint32_t version){
 	ProtocolParser p;
 	if(!p.Init(in)) return {};
 	
-	return p;
+	return std::move(p);
 }
 
 inline ProtocolParser& GetLatestProtocolParser(){
