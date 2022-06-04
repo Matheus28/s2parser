@@ -112,6 +112,7 @@ struct SC2ReplayListeners {
 	Listener *tracker = nullptr;
 	Listener *game = nullptr;
 	Listener *details = nullptr;
+	Listener *initData = nullptr;
 	
 	Listener *lastGameEventWorkaround = nullptr;
 };
@@ -250,6 +251,18 @@ inline bool LoadSC2Replay(const char *filename, SC2ReplayListeners &listeners){
 				*str,
 				"NNet.Game.SDetails",
 				listeners.details
+			)){
+				return false;
+			}
+		}
+	}
+	
+	if(listeners.initData){
+		if(auto str = GetMPQFile(mpq.get(), "replay.initData")){
+			if(!replayProtocol->DecodeInstance<false>(
+				*str,
+				"NNet.Replay.SInitData",
+				listeners.initData
 			)){
 				return false;
 			}

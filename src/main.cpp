@@ -185,6 +185,9 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 	auto headerJSON = JSONBuilderListener(true);
 	listeners.header = &headerJSON;
 	
+	auto initDataJSON = JSONBuilderListener(true);
+	listeners.initData = &initDataJSON;
+	
 	WorkaroundListener workaroundListener;
 	listeners.lastGameEventWorkaround = &workaroundListener;
 	
@@ -194,6 +197,7 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 	
 	if(detailsJSON.GetJSON().empty()) return false;
 	if(headerJSON.GetJSON().empty()) return false;
+	if(initDataJSON.GetJSON().empty()) return false;
 	
 	std::string region;
 	
@@ -225,6 +229,7 @@ bool ProcessReplay(const char *filename, std::ostream &out){
 		}
 	}
 	
+	out << "{\"type\":\"initData\",\"data\":" << initDataJSON.GetJSON().back().serialize(pretty) << "}\n";
 	out << "{\"type\":\"details\",\"data\":" << detailsJSON.GetJSON().back().serialize(pretty) << "}\n";
 	out << "{\"type\":\"header\",\"data\":" << headerJSON.GetJSON().back().serialize(pretty) << "}\n";
 	
