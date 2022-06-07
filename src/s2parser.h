@@ -667,22 +667,15 @@ private:
 		}
 	};
 	
-	// Just a 4 byte unaligned bytes
+	// Just a 4 byte aligned bytes... which are a string
 	struct FourCCType : Type {
 		void DecodeImplied(BitPackedBuffer &buf, Listener *listener) override {
-			uint32_t v;
-			auto str = buf.ReadAlignedBytes(4);
-			memcpy(&v, str.data(), 4);
-			listener->OnValueInt(v);
+			listener->OnValueString(buf.ReadAlignedBytes(4));
 		}
 		
 		void DecodeVersioned(BitPackedBuffer &buf, Listener *listener) override {
 			buf.ExpectSkip(7);
-			
-			uint32_t v;
-			auto str = buf.ReadAlignedBytes(4);
-			memcpy(&v, str.data(), 4);
-			listener->OnValueInt(v);
+			listener->OnValueString(buf.ReadAlignedBytes(4));
 		}
 		
 		void Print(std::ostream &out) override {
